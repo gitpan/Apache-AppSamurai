@@ -1,0 +1,28 @@
+AppSamurai TODO
+---------------
+* bug - Strange output on login after ActiveSync session timeout:
+	x.x.x.x - - [09/Jun/2007:09:03:00 -0500] "\x03\x01j" 302 - "-" "-"
+* bug - Unexpected session death: Session gone and AuthUnique hits.
+
+* doc - Howto? FAQ?       
+* doc - Add method documentation to modules.  (Missing on many, including
+        "alterlist" related methods.)
+
+* feature - Add more auth modules (PAM, local, TACACS+, Kerberos, LDAP, SASL, etc)
+* feature - Add tracked nonce check to login.pl to identify attempted re-posts
+* feature - Add multi-stage login support (for challenge/response, next
+            tokencode mode, etc.)
+* feature - CheckUrl is faulty and more extensive URL/header filtering needed
+* feature - Finish and test the RequestFilter feature.
+* feature - Logout is crude and blocks application's native logout.  Add a
+            capture system to send logout request to backend, then bundle into
+            session kill and send back to browser.
+* feature - Add alterlist configuration options (for Apache config)
+* feature - Should refactor the Session, Tracker, and AlterList into individual
+            modules.  AppSamurai.pm is WAY too fat a pig.
+* feature - Modularize/generalize the Tracker feature to be like Auth system.
+
+* uber-feature - Filter server responses. (Would require side-stepping mod_proxy
+                 in Apache 1.x)
+----
+$Id: TODO,v 1.7 2007/07/13 20:17:42 pauldoom Exp $
