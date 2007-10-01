@@ -2,7 +2,7 @@
 # the same interface as Apache::Session::Flex with the ability to use
 # additional features. 
 
-# $Id: Session.pm,v 1.6 2007/07/13 20:17:48 pauldoom Exp $
+# $Id: Session.pm,v 1.8 2007/09/13 07:00:18 pauldoom Exp $
 
 ##
 # Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
@@ -18,10 +18,8 @@
 package Apache::AppSamurai::Session;
 use strict;
 
-# Keep VERSION (set manually) and REVISION (set by CVS)
-use vars qw($VERSION $REVISION @ISA $incl);
-$VERSION = '0.01';
-$REVISION = substr(q$Revision: 1.6 $, 10);
+use vars qw($VERSION @ISA $incl);
+$VERSION = substr(q$Revision: 1.8 $, 10, -1);
 
 use Apache::Session;
 

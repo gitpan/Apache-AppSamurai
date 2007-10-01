@@ -6,9 +6,9 @@ README
 TODO
 examples/auth/AuthTest.pm
 examples/conf/appsamurai-owa.conf
+examples/conf/confconfer.pl
 examples/htdocs/login.html
 examples/htdocs/login.pl
-examples/htdocs/logout.pl
 examples/htdocs/robots.txt
 examples/htdocs/images/AppSamurai-logo1-200x271-trans.png
 lib/Apache/AppSamurai.pm
@@ -27,3 +27,5 @@ t/11-session-gen-hmac_sha.t
 t/12-session-ser-cryptbase64.t
 t/15-tracker.t
 t/50-authbase.t
+t/startup.pl
+Makefile.PL

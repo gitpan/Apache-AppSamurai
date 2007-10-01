@@ -3,7 +3,7 @@
 #                                takes input server key and client session key
 #                                and returns the SHAx HMAC of the two.
 
-# $Id: HMAC_SHA.pm,v 1.6 2007/07/13 20:17:50 pauldoom Exp $
+# $Id: HMAC_SHA.pm,v 1.8 2007/09/13 07:00:19 pauldoom Exp $
 
 ##
 # Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
@@ -16,10 +16,8 @@
 package Apache::AppSamurai::Session::Generate::HMAC_SHA;
 use strict;
 
-# Keep VERSION (set manually) and REVISION (set by CVS)
-use vars qw($VERSION $REVISION);
-$VERSION = '0.01';
-$REVISION = substr(q$Revision: 1.6 $, 10);
+use vars qw($VERSION);
+$VERSION = substr(q$Revision: 1.8 $, 10, -1);
 
 use Digest::SHA qw(sha256_hex hmac_sha256_hex);
 

@@ -1,6 +1,6 @@
 # Apache::AppSamurai - Protect your master, even if he is without honour.
 
-# $Id: AppSamurai.pm,v 1.49 2007/07/14 04:01:58 pauldoom Exp $
+# $Id: AppSamurai.pm,v 1.63 2007/09/29 23:23:53 pauldoom Exp $
 
 ##
 # Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
@@ -17,18 +17,53 @@
 
 package Apache::AppSamurai;
 use strict;
+use warnings;
 
 # Keep VERSION (set manually) and REVISION (set by CVS)
-use vars qw($VERSION $REVISION);
-$VERSION = '0.9';
-$REVISION = substr(q$Revision: 1.49 $, 10);
+use vars qw($VERSION $REVISION $MP);
+$VERSION = '1.00';
+$REVISION = substr(q$Revision: 1.63 $, 10, -1);
 
 use Carp;
-use mod_perl qw(1.07 StackedHandlers MethodHandlers Authen Authz);
-use Apache;
-use Apache::Constants qw(:response :methods);
-use Apache::Log;
-use Apache::Util qw(escape_uri);
+
+# mod_perl Includes
+BEGIN {
+    if (eval{require mod_perl2;}) {
+	mod_perl2->import(qw(1.9922 StackedHandlers MethodHandlers Authen Authz));
+        require Apache2::Connection;
+	require Apache2::RequestRec;
+	require Apache2::RequestUtil;
+	require Apache2::Log;
+	require Apache2::Access;
+	require Apache2::Response;
+	require Apache2::Util;
+	require Apache2::URI;
+	require APR::Table;
+	require APR::Pool;
+	require Apache2::Const;
+	Apache2::Const->import(qw(OK DECLINED REDIRECT HTTP_FORBIDDEN
+				  HTTP_INTERNAL_SERVER_ERROR
+				  HTTP_MOVED_TEMPORARILY HTTP_UNAUTHORIZED
+				  M_GET));
+	require Apache2::Request;
+	$MP = 2;
+    } else {
+	require mod_perl;
+	mod_perl->import(qw(1.07 StackedHandlers MethodHandlers Authen Authz));
+	require Apache;
+	require Apache::Log;
+	require Apache::Util;
+	require Apache::Constants;
+	Apache::Constants->import(qw(OK DECLINED REDIRECT HTTP_FORBIDDEN
+				     HTTP_INTERNAL_SERVER_ERROR
+				     HTTP_MOVED_TEMPORARILY HTTP_UNAUTHORIZED
+				     M_GET));
+	require Apache::Request;
+	$MP = 1;
+    }
+}
+
+# Non-mod_perl includes
 use CGI::Cookie;
 use URI;
 use Time::HiRes qw(usleep);
@@ -51,16 +86,25 @@ use Apache::AppSamurai::Tracker;
 
 # The following lower case methods are directly based on Apache::AuthCookie, or
 # are required AuthCookie methods (like authen_cred() and authen_ses_key())
+
+# Note - ($$) syntax, used in mod_perl 1 to induce calling the handler as
+# an object, has been eliminated in mod_perl 2.  Each handler method called
+# directly from Apache must be wrapped to support mod_perl 1 and mod_perl 2
+# calls.  (Just explaining the mess before you have to read it.)
+
 # Identify the username for the session and set for the request
-sub recognize_user ($$) {
+sub recognize_user_mp1 ($$) { &recognize_user_real }
+sub recognize_user_mp2 : method { &recognize_user_real }
+*recognize_user = ($MP eq 1) ? \&recognize_user_mp1 : \&recognize_user_mp2;
+sub recognize_user_real {
     my ($self, $r) = @_;
     my ($auth_type, $auth_name) = ($r->auth_type, $r->auth_name);
     
-    return DECLINED unless $auth_type && $auth_name;    
+    return DECLINED unless $auth_type and $auth_name;    
 
     my $cookie_name = $self->cookie_name($r);
     
-    my ($cookie) = $r->header_in('Cookie') =~ /$cookie_name=([^;]+)/;
+    my ($cookie) = $r->headers_in->{'Cookie'} =~ /$cookie_name=([^;]+)/;
     if (!$cookie && $r->dir_config("${auth_name}Keysource")) {
 	# Try to get key text using alternate method then compute the key.
 	# FetchKeysource returns '' if no custom source is configured, in
@@ -79,7 +123,7 @@ sub recognize_user ($$) {
     my ($user,@args) = $auth_type->authen_ses_key($r, $cookie);
     if ($user and scalar @args == 0) {
 	$self->Log($r, ('debug', "recognize_user(): user is $user"));
-	$r->connection->user($user);
+	($MP eq 1) ? ($r->connection->user($user)) : ($r->user($user));
     } elsif (scalar @args > 0 and $auth_type->can('custom_errors')) {
 	return $auth_type->custom_errors($r, $user, @args);
     } else {
@@ -94,6 +138,7 @@ sub recognize_user ($$) {
 # Get the cookie name for this protected area
 sub cookie_name {
     my ($self, $r) = @_;
+
     my $auth_type = $r->auth_type;
     my $auth_name = $r->auth_name;
     my $cookie_name = $r->dir_config("${auth_name}CookieName") ||
@@ -103,24 +148,22 @@ sub cookie_name {
 
 # Set request cache options (no-cache unless specifically told to cache)
 sub handle_cache {
-    my $self = shift;
-    my $r = Apache->request;
+    my ($self, $r) = @_;
     
     my $auth_name = $r->auth_name;
     return unless $auth_name;
 
     unless ($r->dir_config("${auth_name}Cache")) {
 	$r->no_cache(1);
-	if (!$r->header_out('Pragma')) {
-	    $r->err_header_out(Pragma => 'no-cache');
+	if (!$r->headers_out->{'Pragma'}) {
+	    $r->err_headers_out->{'Pragma'} = 'no-cache';
 	}
     }
 }
 
 # Backdate cookie to attempt to clear from web browser cookie store
 sub remove_cookie {
-    my $self = shift;
-    my $r = Apache->request;
+    my ($self, $r) = @_;
     
     my $cookie_name = $self->cookie_name($r);
     my $str = $self->cookie_string( request => $r,
@@ -134,21 +177,39 @@ sub remove_cookie {
 }
 
 # Convert current POST request to GET
+# Note - The use of this is questionable now that Apache::Request is being
+# used.  May go away in the future.
 sub _convert_to_get {
-    my ($self, $r, $args) = @_;
+    my ($self, $r) = @_;
     return unless $r->method eq 'POST';
 
     $self->Log($r, ('debug', "Converting POST -> GET"));
+
+    # Use Apache::Request for immediate access to all arguments.
+    my $ar = ($MP eq 1) ? Apache::Request->instance($r) : Apache2::Request->new($r);
     
-    my @pairs =();
-    while (my ($name, $value) = each %$args) {
-	# we don't want to copy login data, only extra data
-	next if ($name eq 'destination' or $name =~ /^credential_\d+$/);
-	
-	$value = '' unless defined $value;
-	
-	for my $v (split /\0/, $value) {
-	    push @pairs, escape_uri($name) . '=' . escape_uri($v);
+    # Pull list if GET and POST args
+    my @params = $ar->param;
+    my ($name, @values, $value);
+    my @pairs = ();
+
+    foreach $name (@params) {
+	# we don't want to copy login data, only extra data.
+	$name =~ /^(destination|credential_\d+)$/ and next;
+		
+	# Pull list of values for this key
+	@values = $ar->param($name);
+		
+	# Make sure there is at least one value, which can be empty
+	(scalar(@values)) or ($values[0] = '');
+
+	foreach $value (@values) {
+	    if ($MP eq 1) {
+		push(@pairs, Apache::Util::escape_uri($name) . '=' . Apache::Util::escape_uri($value));
+	    } else {
+		# Assume mod_perl 2 behaviour
+		push(@pairs, Apache2::Util::escape_path($name, $r->pool) . '=' . Apache2::Util::escape_path($value, $r->pool));
+	    }
 	}   
     }
     
@@ -159,57 +220,47 @@ sub _convert_to_get {
     $r->headers_in->unset('Content-Length');
 }
 
-# Cleanly get multivalue form data
-sub _get_form_data {
-    my ($self, $r) = @_;
-    my @pairs = $r->method eq 'POST' ? $r->content : $r->args;
-    my %vars = ();
-    
-    while (my ($name, $value) = splice @pairs, 0, 2) {
-	unless (defined $vars{$name}) {
-	    $vars{$name} = $value;
-	}
-	else {
-	    $vars{$name} .= "\0$value";
-	}
-    }
-    
-    return %vars;
-}
 
 # Handle regular (form based) login
-sub login ($$) {
+sub login_mp1 ($$) { &login_real }
+sub login_mp2 : method { &login_real }
+*login = ($MP eq 1) ? \&login_mp1 : \&login_mp2;
+sub login_real {
     my ($self, $r) = @_;
     my ($auth_type, $auth_name) = ($r->auth_type, $r->auth_name);
-    my %args = $self->_get_form_data($r);
-    my $ses_key;
+    
+    # Use the magic of Apache::Request to ditch POST handling code
+    # and cut to the args.
+    my $ar = ($MP eq 1) ? Apache::Request->instance($r) : Apache2::Request->new($r);
+
+    my ($ses_key, $tc, $destination);
     my @credentials = ();
 
-    $self->_convert_to_get($r, \%args) if $r->method eq 'POST';
-    
-    unless (exists $args{'destination'}) {
-	$self->Log($r, ('warn', "No key 'destination' found in form data on login"));
-	# Append error code to current URI and args and call up login form.
-	if ($r->args) {
-	    $r->uri($self->URLErrorCode($r->uri . $r->args, 'no_cookie'));
-	} else {
-	    $r->uri($self->URLErrorCode($r->uri,'no_cookie'));
-	}
-	return $auth_type->login_form;
-    }
-    
+    # Get the hard set destination, or setup to just reload
+    if ($r->dir_config("${auth_name}LoginDestination")) {
+	$destination = $r->dir_config("${auth_name}LoginDestination");
+    } elsif ($ar->param("destination")) {
+	$destination = $ar->param("destination");
+    } else {
+	# Someday something slick could hold the URL, then cut through
+	# to it.  Someday.  Today we die.
+        $r->server->log_error("No key 'destination' found in form data");
+        $r->subprocess_env('AuthCookieReason', 'no_cookie');
+        return $auth_type->login_form($r);
+    }  
+
     # Get the credentials from the data posted by the client
-    for (my $i = 0; exists $args{"credential_$i"}; $i++) {
-	my $key = "credential_$i";
-	if ($args{$key}) {
-	    push @credentials, $args{$key};
-	    $args{$key} =~ /^(.)/; # Only pull the first character for logging
-	    $self->Log($r, ('debug', "login(); Received credential_" . ($#credentials + 1) . ": $1 (hint)"));
-	} else {
-	    $self->Log($r, ('warn', "login(): credential_" . $i + 1 . " is empty"));  
-	}
+    while ($tc = $ar->param("credential_" . scalar(@credentials))) {
+	push(@credentials, $tc);
+	
+	($tc) ? ($tc =~ s/^(.).*$/$1/s) : ($tc = ''); # Only pull first char
+ 	                                              # for logging
+	$self->Log($r, ('debug', "login(); Received credential_" . (scalar(@credentials) - 1) . ": $tc (hint)"));
     }
 
+    # Convert all args into a GET and clear the credential_X args
+    $self->_convert_to_get($r) if $r->method eq 'POST';
+    
     # Check against credential cache if UniqueCredentials is set
     if ($r->dir_config("${auth_name}AuthUnique")) {
 	unless ($self->CheckTracker($r, 'AuthUnique', @credentials)) {
@@ -221,27 +272,24 @@ sub login ($$) {
     }
 
     if (@credentials) {
-	# Save username in pnotes in case login form wants to use it
-	$r->pnotes("${auth_name}Creds", $credentials[0]);
-
 	# Exchange the credentials for a session key.
 	$ses_key = $self->authen_cred($r, @credentials);
 	if ($ses_key) {
 	    # Set session cookie with expiration included if SessionExpire
 	    # is set. (Extended +8 hours so we see logout events and cleanup)
 	    if ($r->dir_config("${auth_name}SessionExpire")) {
-		$self->send_cookie($ses_key, {expires => $r->dir_config("${auth_name}SessionExpire") + 28800});
+		$self->send_cookie($r, $ses_key, {expires => $r->dir_config("${auth_name}SessionExpire") + 28800});
 	    } else {
-		$self->send_cookie($ses_key);
+		$self->send_cookie($r, $ses_key);
 	    }
-	    $self->handle_cache;
+	    $self->handle_cache($r);
 	    
 	    # Log 1/2 of session key to debug
 	    $self->Log($r, ('debug', "login(): session key (browser cookie value): " . XHalf($ses_key)));
 	    
 	    # Godspeed You Black Emperor!
-	    $r->header_out("Location" => $args{'destination'});
-	    return REDIRECT;
+	    $r->headers_out->{"Location"} = $destination;
+	    return HTTP_MOVED_TEMPORARILY;
 	}
     }
 
@@ -250,31 +298,40 @@ sub login ($$) {
     # from blindly reposting... can add a fail here if an embedded form
     # verification key is added to the mix in the future)
     if ($r->dir_config("${auth_name}IPFailures")) {
-	$self->CheckTracker($r, 'IPFailures', $r->dir_config("${auth_name}IPFailures"), $r->get_remote_host);
+        if ($MP eq 1) {
+	    $self->CheckTracker($r, 'IPFailures', $r->dir_config("${auth_name}IPFailures"), $r->get_remote_host);
+        } else {
+            $self->CheckTracker($r, 'IPFailures', $r->dir_config("${auth_name}IPFailures"), $r->connection->get_remote_host);
+        }
     }
 
     # Append special error message code and try to redirect to the entry
     # point. (Avoids having the LOGIN URL show up in the browser window)
-    $r->err_header_out("Location" => $self->URLErrorCode($args{'destination'}, 'bad_credentials'));
+    $r->err_headers_out->{'Location'} = $self->URLErrorCode($destination, 'bad_credentials');
     $r->status(REDIRECT);
     return REDIRECT;
+    # Handle this ol' style
+    #$r->subprocess_env('AuthCookieReason', 'bad_credentials');
+    #$r->uri($destination);
+    #return $auth_type->login_form($r);
 }
 
 # Special version of login that handles Basic Auth login instead of form
 # Can be called by authenticate() if there is no valid session but a
 # Authorization: Basic header is detected.  Can also be called directly,
 # just like login() for targeted triggering
-sub loginBasic ($$) {
+sub loginBasic_mp1 ($$) { &loginBasic_real }
+sub loginBasic_mp2 : method { &loginBasic_real }
+*loginBasic = ($MP eq 1) ? \&loginBasic_mp1 : \&loginBasic_mp2;
+sub loginBasic_real {
     my ($self, $r) = @_;
     my ($auth_type, $auth_name) = ($r->auth_type, $r->auth_name);
-    my %args = $self->_get_form_data($r);
-    my ($ses_key, $t, @at);
+    
+    my ($ses_key, $t, @at, $tc);
     my @credentials = ();
 
     return DECLINED unless $r->is_initial_req; # Authenticate first req only
     
-    $self->_convert_to_get($r, \%args) if $r->method eq 'POST';
-
     # Count input credentials to figure how to split input
     my @authmethods = $self->GetAuthMethods($r);
     (@authmethods) || (die("loginBasic(): Missing authentication methods\n"));    
@@ -326,11 +383,11 @@ sub loginBasic ($$) {
 		# Set session cookie with expiration included if SessionExpire
 		# is set. (Extended +8 hours for logouts/cleanup)
 		if ($r->dir_config("${auth_name}SessionExpire")) {
-		    $self->send_cookie($ses_key, {expires => $r->dir_config("${auth_name}SessionExpire") + 28800});
+		    $self->send_cookie($r, $ses_key, {expires => $r->dir_config("${auth_name}SessionExpire") + 28800});
 		} else {
-		    $self->send_cookie($ses_key);
+		    $self->send_cookie($r, $ses_key);
 		}
-		$self->handle_cache;
+		$self->handle_cache($r);
 
 		# Log 1/2 of session key to debug
 		$self->Log($r, ('debug', "loginBasic(): session key (browser cookie value): " . XHalf($ses_key)));
@@ -339,7 +396,7 @@ sub loginBasic ($$) {
 		$t = $r->uri;
 		($r->args) && ($t .= '?' . $r->args);
 		$self->Log($r, ('debug', "loginBasic(): REDIRECTING TO: $t"));
-		$r->err_header_out("Location" => $t);
+		$r->err_headers_out->{'Location'} = $t;
 		return REDIRECT;
 	    }
 	}
@@ -348,23 +405,33 @@ sub loginBasic ($$) {
     # Unset the username
     $r->user(undef);
 
-    # Add their IP to the failure tracker and just return a FORBIDDEN if they
-    # exceed the limit
+    # Add their IP to the failure tracker and just return HTTP_FORBIDDEN
+    # if they exceed the limit
     if ($r->dir_config("${auth_name}IPFailures")) {
-	unless ($self->CheckTracker($r, 'IPFailures', $r->dir_config("${auth_name}IPFailures"), $r->get_remote_host)) {
-	    $self->Log($r, ('warn', "loginBasic(): Returning FORBIDDEN to IPFailires banned IP"));
-	    return FORBIDDEN;
+        if ($MP eq 1) {
+	    unless ($self->CheckTracker($r, 'IPFailures', $r->dir_config("${auth_name}IPFailures"), $r->get_remote_host)) {
+	        $self->Log($r, ('warn', "loginBasic(): Returning HTTP_FORBIDDEN to IPFailires banned IP"));
+	        return HTTP_FORBIDDEN;
+            }
+        } else {
+            unless ($self->CheckTracker($r, 'IPFailures', $r->dir_config("${auth_name}IPFailures"), $r->connection->get_remote_host)) {
+                $self->Log($r, ('warn', "loginBasic(): Returning HTTP_FORBIDDEN to IPFailires banned IP"));
+                return HTTP_FORBIDDEN;
+            }
 	}
     }
 
     # Set the basic auth header and send back to the client
     $r->note_basic_auth_failure;
-    return AUTH_REQUIRED;
+    return HTTP_UNAUTHORIZED;
 }
 
 
 # Logout, kill session, kill, kill, kill
-sub logout {
+sub logout_mp1 ($$) { &logout_real }
+sub logout_mp2 : method { &logout_real }
+*logout = ($MP eq 1) ? \&logout_mp1 : \&logout_mp2;
+sub logout_real {
     my $self = shift;
     my $r = shift;
     my $auth_name = $r->auth_name;
@@ -374,7 +441,7 @@ sub logout {
     # Get the Cookie header. If there is a session key for this realm, strip
     # off everything but the value of the cookie.
     my $cookie_name = $self->cookie_name($r);
-    my ($key) = $r->header_in('Cookie') =~ /$cookie_name=([^;]+)/;
+    my ($key) = $r->headers_in->{'Cookie'} =~ /$cookie_name=([^;]+)/;
     
     # Try custom keysource if no cookie is present and Keysource is configured
     if (!$key && $auth_name && $r->dir_config("${auth_name}Keysource")) {
@@ -407,8 +474,8 @@ sub logout {
     }
 
     # Try to delete the session.  Note that session handling errors do not 
-    # return but fall through to return OK or REDIRECT depending on how we were
-    # called.
+    # return but fall through to return OK or REDIRECT depending
+    # on how we were called.
     if ($sid) {
 	# Check the SID
   	if ($sid = CheckSidFormat($sid)) {
@@ -440,28 +507,42 @@ sub logout {
     }
     
     # Clear cookie and set no-cache for client
-    $self->remove_cookie;
-    $self->handle_cache;
+    $self->remove_cookie($r);
+    $self->handle_cache($r);
 
-    if ($redirect eq '') {
-  	my %args = $r->args;
-  	if (exists $args{'redirect'}) {
-	    $redirect = $args{'redirect'};
-        }
-    }
-    
+    # Check for hard-coded redirect for logout, or failing that, our
+    # landing page
+    if ($r->dir_config("${auth_name}LogoutDestination")) {
+	$redirect = $r->dir_config("${auth_name}LogoutDestination");
+    } elsif ($r->dir_config("${auth_name}LoginDestination")) {
+	$redirect = $r->dir_config("${auth_name}LoginDestination");
+    } 
+
     if ($redirect ne '') { 
-    	$r->err_header_out("Location" => $redirect);
+    	$r->err_headers_out->{'Location'} = $redirect;
     	$r->status(REDIRECT);
     	return REDIRECT;
     } else {
-	return OK;
+	# Strip path and reload - THIS ONLY WORKS IF / IS REDIRECTED TO THE
+	# LANDING PAGE
+	$r->err_headers_out->{'Location'} = '/';
+	$r->status(REDIRECT);
+    	return REDIRECT;
     }
+ 
+    # Returning the login form without redirecting on logout is probably not
+    # right for any circumstance.  (Leaving this here for reference.)
+    # else {
+    #    return $self->login_form($r);
+    # }
 }
 
 
 # Check for unauthenticated session and force login if not authenticated
-sub authenticate ($$) {
+sub authenticate_mp1 ($$) { &authenticate_real }
+sub authenticate_mp2 : method { &authenticate_real }
+*authenticate = ($MP eq 1) ? \&authenticate_mp1 : \&authenticate_mp2;
+sub authenticate_real {
     my ($self, $r) = @_;
     my $auth_user;
     my ($t, $foundcookie);
@@ -469,7 +550,8 @@ sub authenticate ($$) {
     unless ($r->is_initial_req) {
 	if (defined $r->prev) {
 	    # we are in a sub-request.  Just copy user from previous request.
-	    $r->connection->user($r->prev->connection->user);
+	    ($MP eq 1) ? ($r->connection->user($r->prev->connection->user)) :
+		($r->user($r->prev->user));
 	}
 	return OK;
     }
@@ -486,27 +568,13 @@ sub authenticate ($$) {
     $self->Log($r, ('debug', "authenticate(): auth_name " . $auth_name));
     unless ($auth_name) {
 	$r->log_reason("AuthName not set, AuthType=$self", $r->uri);
-	return SERVER_ERROR;
+	return HTTP_INTERNAL_SERVER_ERROR;
     }
-    
-    ## The RequestFilter is not well tested, and with mod_rewrite, does not
-    ## add enough to make it a priority.  I'll test and enable it in future
-    ## versions if there is interest/compelling use. - Paul
-    ## That's far enough.  Time to hit the request filter now that we know this
-    ## area is under our protection
-    #if ($r->dir_config("${auth_name}RequestFilter")) {
-    #	my $retcode = $self->RequestFilter($r);
-    #	if ($retcode != OK) {
-	    # That is not okay, alright.
-    #	    $self->Log($r, ('warn', "${auth_name}RequestFilter returned $retcode"));
-    #	    return $retcode;
-    #	}
-    #}
     
     # Get the Cookie header. If there is a session key for this realm, strip
     # off everything but the value of the cookie.
     my $cookie_name = $self->cookie_name($r);
-    my ($ses_key_cookie) = ($r->header_in("Cookie") || "") =~ /$cookie_name=([^;]+)/;
+    my ($ses_key_cookie) = ($r->headers_in->{"Cookie"} || "") =~ /$cookie_name=([^;]+)/;
     
     $foundcookie = 0;
     if ($ses_key_cookie) {
@@ -537,8 +605,14 @@ sub authenticate ($$) {
 	    # We have a valid session key, so we return with an OK value.
 	    # Tell the rest of Apache what the authentication method and
 	    # user is.
-	    $r->connection->auth_type($self);
-	    $r->connection->user($auth_user);
+	    if ($MP eq 1) {
+		$r->connection->auth_type($self);
+		$r->connection->user($auth_user);
+	    } else {
+		# Assume MP2 behaviour
+		$r->ap_auth_type($self);
+		$r->user($auth_user);
+	    }
 	    $self->Log($r, ('debug', "authenticate(): user authenticated as $auth_user"));
 	    
 	    return OK;
@@ -549,9 +623,9 @@ sub authenticate ($$) {
 	    # There was a session key set, but it's invalid.
 	    if ($foundcookie) {
 		# Remove cookie from the client now so it does not come back.
-		$self->remove_cookie;
+		$self->remove_cookie($r);
 	    }
-	    $self->handle_cache;
+	    $self->handle_cache($r);
 	    $r->subprocess_env('AppSamuraiReason', 'bad_cookie');
 
 	    # Add to our the session tracker (so we can short cut if resent)
@@ -573,33 +647,27 @@ sub authenticate ($$) {
     } else {
 	# They aren't authenticated, and they tried to get a protected
 	# document.  Send them the authen form.
-	return $self->login_form;
+	return $self->login_form($r);
     }
 }
 
 # Generate login form
 sub login_form {  
-    my $self = shift;
-    
-    my $r = Apache->request or die("no request\n");
+    my ($self, $r) = @_;
     my $auth_name = $r->auth_name;
     
-    my %args = $self->_get_form_data($r);
-    
-    $self->_convert_to_get($r, \%args) if $r->method eq 'POST';
-    
-    # There should be a PerlSetVar directive that gives us the URI of
-    # the script to execute for the login form.
+    # Pull POST args into the GET args and set type as GET
+    $self->_convert_to_get($r) if $r->method eq 'POST';
     
     my $authen_script;
     unless ($authen_script = $r->dir_config($auth_name . "LoginScript")) {
 	$self->Log($r, ('error', "login_form(): PerlSetVar '${auth_name}LoginScript' not set", $r->uri));
-	return SERVER_ERROR;
+	return HTTP_INTERNAL_SERVER_ERROR;
     }
-    $self->Log($r, ('debug', "login_form(): Redirecting to $authen_script"));
-    $r->custom_response(FORBIDDEN, $authen_script);
+    $self->Log($r, ('debug', "login_form(): Displaying $authen_script"));
+    $r->custom_response(HTTP_FORBIDDEN, $authen_script);
     
-    return FORBIDDEN;
+    return HTTP_FORBIDDEN;
 }
 
 # Check for sane "satisfy" setting
@@ -625,7 +693,10 @@ sub get_satisfy {
 
 
 # Check for proper authorization for the area
-sub authorize ($$) {
+sub authorize_mp1 ($$) { &authorize_real }
+sub authorize_mp2 : method { &authorize_real }
+*authorize = ($MP eq 1) ? \&authorize_mp1 : \&authorize_mp2;
+sub authorize_real {
     my ($self, $r) = @_;
 
     $self->Log($r, ('debug', 'authorize(): URI '.$r->uri()));
@@ -638,15 +709,15 @@ sub authorize ($$) {
     
     my $reqs_arr = $r->requires or return DECLINED;
     
-    my $user = $r->connection->user;
+    my $user = ($MP eq 1) ? ($r->connection->user) : ($r->user);
     unless ($user) {
 	# user is either undef or =0 which means the authentication failed
 	$r->log_reason("No user authenticated", $r->uri);
-	return FORBIDDEN;
+	return HTTP_FORBIDDEN;
     }
     
     my $satisfy = $self->get_satisfy($r);
-    return SERVER_ERROR unless $self->satisfy_is_valid($r,$satisfy);
+    return HTTP_INTERNAL_SERVER_ERROR unless $self->satisfy_is_valid($r,$satisfy);
     my $satisfy_all = $satisfy eq 'all';
     
     my ($forbidden);
@@ -685,13 +756,12 @@ sub authorize ($$) {
 	$forbidden = 1;
     }
 
-    return $forbidden ? FORBIDDEN : OK;
+    return $forbidden ? HTTP_FORBIDDEN : OK;
 }
 
 # Have a session cookie Mr. Browser
 sub send_cookie {
-    my ($self, $ses_key, $cookie_args) = @_;
-    my $r = Apache->request();
+    my ($self, $r, $ses_key, $cookie_args) = @_;
     
     $cookie_args = {} unless defined $cookie_args;
     
@@ -705,7 +775,7 @@ sub send_cookie {
     # add P3P header if user has configured it.
     my $auth_name = $r->auth_name;
     if (my $p3p = $r->dir_config("${auth_name}P3P")) {
-	$r->err_header_out(P3P => $p3p);
+	$r->err_headers_out->{'P3P'} = $p3p;
     }
     
     $r->err_headers_out->add("Set-Cookie" => $cookie);
@@ -762,12 +832,12 @@ sub cookie_string {
 
 # Retrieve session cookie value 
 sub key {
-    my $self = shift;
-    my $r = Apache->request;
+    my ($self, $r) = @_;
+
     my $auth_name = $r->auth_name;
     my $key = "";
 
-    my $allcook = ($r->header_in("Cookie") || "");
+    my $allcook = ($r->headers_in->{"Cookie"} || "");
     my $cookie_name = $self->cookie_name($r);
     ($key) = $allcook =~ /(?:^|\s)$cookie_name=([^;]*)/;
 
@@ -786,8 +856,7 @@ sub key {
 
 # Retrieve session cookie path
 sub get_cookie_path {
-    my $self = shift;
-    my $r    = shift || Apache->request;
+    my ($self, $r) = @_;
     
     my $auth_name = $r->auth_name;
     
@@ -937,7 +1006,7 @@ sub authen_ses_key {
     } elsif (!$self->CheckTime(\%sess)) {
         # Expiration check failed
 	$reason = 'timeout';
-    } elsif (($sess{"Authorization"}) && ($r->header_in("Authorization")) && ($r->header_in("Authorization") ne $sess{"Authorization"})) {
+    } elsif (($sess{"Authorization"}) && ($r->headers_in->{"Authorization"}) && ($r->headers_in->{"Authorization"} ne $sess{"Authorization"})) {
 	# Client sent a Authorization header that does not match the one sent
 	# when logging in.  This indicates one of two potential issues:
 	# 1) For areas configured to use basic auth, the auth has changed on
@@ -956,8 +1025,8 @@ sub authen_ses_key {
 	    $self->AlterlistPassBackCookie($alterlist, $r);
 	}
 	
-	$self->remove_cookie;
-	$self->handle_cache;
+	$self->remove_cookie($r);
+	$self->handle_cache($r);
 	
 	# Wake up.  Time to die.
         $self->DestroySession($r, \%sess);
@@ -1003,7 +1072,7 @@ sub custom_errors {
 	$t = $r->uri;
 	($r->args) && ($t .= "?" . $r->args);
 	$r->uri($self->URLErrorCode($t, 'message'));
-	return $self->login_form;
+	return $self->login_form($r);
     } elsif ($code =~ /^([A-Z0-9_]+)$/) {
 	# Codes in all caps with an underscore are assumed to be Apache
         # response codes
@@ -1076,7 +1145,7 @@ sub InitAuthenticators {
 	    # If a "header:<field>" is requested, replace with the named
 	    # header's value from the client request, or an empty string
 	    if ($ch->{$skn} =~ /^header:([\w\d\-]+)$/i) {
-		$ch->{$skn} = $r->header_in($1);
+		$ch->{$skn} = $r->headers_in->{$1};
 	    }
 	}
 
@@ -1116,6 +1185,11 @@ sub GetSessionConfig {
 	return undef;
     }
 
+    ## TODO    - This section of session autoconfig/defaults is pretty
+    ##           inflexilbe and too tightly tied to HMAC_SHA and CryptBase64.
+    ##           It should be abolished or moved out and into a generalized
+    ##           pre-config module that can be called ONCE (at startup)
+
     # Use files for storage and locking by default
     (exists($sessconfig->{Store})) || ($sessconfig->{Store} = "File");
     (exists($sessconfig->{Lock})) || ($sessconfig->{Lock} = "File");
@@ -1131,10 +1205,10 @@ sub GetSessionConfig {
     }
 
     # Use HMAC_SHA and CryptBase64 for session creation and serialization
-    # by default
+    # by default.
     (exists($sessconfig->{Generate})) || ($sessconfig->{Generate} = "AppSamurai/HMAC_SHA");
     (exists($sessconfig->{Serialize})) || ($sessconfig->{Serialize} = "AppSamurai/CryptBase64");
-
+    
     # Check/clean ServerKey if present
     if (exists($sessconfig->{ServerPass})) {
 	($sessconfig->{ServerPass} =~ s/^\s*([[:print:]]{8,}?)\s*$/$1/s) || (($self->Log($r, ('error', "GetSessionConfig(): Invalid ServerKey (must be use at least 8 printable characters"))) && (return undef));
@@ -1146,8 +1220,25 @@ sub GetSessionConfig {
     # We have to have a ServerKey at this point, in hex form.
     if (($sessconfig->{Generate} =~ /HMAC/i) || ($sessconfig->{Serialize} =~ /Crypt/i)) {
 	unless (CheckSidFormat($sessconfig->{ServerKey})) {
+	    # Bad server key format
 	    $self->Log($r, ('error', "GetSessionConfig(): You must a valid ${auth_name}ServerPass or ${auth_name}ServerKey!"));
 	    return undef;
+	}
+	
+	# For speed, SerializeCipher should be set in the config
+	if (!$sessconfig->{SerializeCipher}) {
+	    # Attempt to load CryptBase64 module
+	    unless (eval "require Apache::AppSamurai::Session::Serialize::CryptBase64") {
+		$self->Log($r, ('error', "GetSessionConfig(): Could not load CryptBase64 while attempting to auto-select ${auth_name}SerializeCipher value: $!"));
+		return undef;
+	    }
+	    # Use CryptBase64 cipher detection utility (Slower)
+	    unless ($sessconfig->{SerializeCipher} = &Apache::AppSamurai::Session::Serialize::CryptBase64::find_cipher()) {
+		# None found.  (Note - Check @allowedciphers in CryptBase64.pm
+		# for supported ciphers)
+		$self->Log($r, ('error', "GetSessionConfig(): Could not auto-detect a suitable ${auth_name}SerializeCipher value (Please configure manualy): $!"));
+		return undef;
+	    }
 	}
     }
     
@@ -1218,14 +1309,16 @@ sub FetchKeysource {
     # for a fully randomized key
     return '' unless (scalar @srcs);
 
-    my %args = $r->args();
+    # Use Apache::Request for immediate access to all arguments.
+    my $ar = ($MP eq 1) ? Apache::Request->instance($r) : Apache2::Request->new($r);
+
     my ($s, $t);
     my $keytext = '';
     
     # Pull values in with very moderate checking
     foreach $s (@srcs) {
 	if ($s =~ /^\s*header:([\w\d\-\_]+)\s*$/i) {
-	    if (($t) = $r->header_in($1) =~ /^\s*([\x20-\x7e]+?)\s*$/s) {
+	    if (($t) = $r->headers_in->{$1} =~ /^\s*([\x20-\x7e]+?)\s*$/s) {
 		$keytext .= $t;
 		$self->Log($r, ('debug', "FetchKeysource(): Collected $s: " . XHalf($t)));
 	    } else {
@@ -1233,7 +1326,7 @@ sub FetchKeysource {
 		return undef;
 	    }
 	} elsif ($s =~ /^\s*arg:([\w\d\.\-\_]+)\s*$/i) {
-	    if (exists($args{$1}) && (($t) = $args{$1} =~ /^\s*([^\r\n]+?)\s*$/)) {
+	    if (($t = $ar->param($1)) && ($t =~ s/^\s*([^\r\n]+?)\s*$/$1/)) {
 		$keytext .= $t;
 		$self->Log($r, ('debug', "FetchKeysource(): Collected $s: " . XHalf($t)));
 	    } else {
@@ -1325,8 +1418,8 @@ sub CreateSession {
     # pass though to the backend server.  (If needed, a separate
     # alterlist rule to add an Authorization header should be set
     # by a auth module.)
-    if ($r->header_in("Authorization")) {
-	$sess{'Authorization'} = $r->header_in("Authorization");
+    if ($r->headers_in->{"Authorization"}) {
+	$sess{'Authorization'} = $r->headers_in->{"Authorization"};
 	# Stick it in front in case we have an existing add
 	# header from an auth module
 	unshift(@{$alterlist->{header}}, 'delete:Authorization:');
@@ -1665,115 +1758,6 @@ sub CheckTime {
     return $ret;
 }
 
-# The RequestFilter is a somewhat crude filter applied to the request opening
-# line.  Current rule syntax is:
-#
-#          STATUS[,FLAGS]:METHOD_MATCH:URI_MATCH
-#
-# STATUS - HTTP status code to return if line matches (OK, FORBIDDEN,
-#          SERVER_ERROR, AUTH_REQUIRED, or DECLINED are allowed, though the
-#          first two should be all that are generally needed)
-#
-# ,FLAGS - Optional flags ( separated by ,):
-#     quick - (stop processing if this rule matches)
-#
-# METHOD_MATCH - (optional) | separated list of HTTP methods (Ex: POST|GET)
-#
-# URI_MATCH - (optional) regex to match the path+get args of request
-#
-#
-# Example: Allow POST or GET requests to /test/test.html?name= with name equal
-#  to "Ron" or "Steve" only.  Stops processing if a match is made:
-#
-# EXAMPLERequestFilter OK,quick:POST|GET:^\/test\/test\.html\?name=(Ron|Steve)$
-#
-# Omitting the METHOD_MATCH or URI_MATCH will match any (.*)
-#
-# Important Notes:
-# * Rules are matched IN ORDER, and the LAST MATCH is used to make the
-#  decision.
-# * The METHOD_MATCH or URI_MATCH can be prefixed with ! to negate the match
-sub _RequestFilter { # NOTE - CURRENTLY DISSABLED
-    my ($self, $r) = @_;
-    my ($t, $rr, $rt, $ro, $rm, $rf, $m, $u, $ret); 
-    ($r->auth_name) || (return 0);
-    my $auth_name = $r->auth_name;
-    
-    # Get the method
-    $m = $r->method;
-    # Get and combine URI and arguments
-    $u = $r->uri . '?' . $r->args;
-
-    # Get filter rules, in order
-    my @rules = $r->dir_config->get("${auth_name}RequestFilter");
-    (scalar(@rules)) || (return OK);
-
-    # Cycle rules
-    foreach $rr (@rules) {
-	unless ($rr =~ /^([\w\_]+)(,[a-z\,]+)?\:(\!?[A-Z\|]*):(.*?)\s*$/) {
-	    $self->Log($r, ('warn', "RequestFilter(): Malformed RequestFilter rule \"$rr\""));
-	    next;
-	}
-	$rt = lc($1);
-	$ro = $2; 
-	$rm = $3;
-	$rf = $4;
-	
-	# Look up and set the return code (this sucks...)
-      SWITCH: {
-	  if ($rt eq 'ok') { $rt = OK; last SWITCH; }
-	  if ($rt eq 'forbidden') { $rt = FORBIDDEN; last SWITCH; }
-	  if ($rt eq 'server_error') { $rt = SERVER_ERROR; last SWITCH; }
-	  if ($rt eq 'auth_required') { $rt = AUTH_REQUIRED; last SWITCH; }
-	  if ($rt eq 'declined') { $rt = DECLINED; last SWITCH; }
-	  ($self->Log($r, ('warn', "RequestFilter(): Invalid status in RequestFilter rule \"$rr\""))) && (next);
-      }
-	
-	if ($rm) {
-	    # Filter the method
-	    if ($rm =~ s/^!//) {
-		# Negation in effect: If rule matches, skip
-		($m =~ /^$rm$/) && (next);
-	    } else {
-		# Unless rule matches, skip
-		($m =~ /^$rm$/) || (next);
-	    }
-	}
-
-	if ($rf) {
-	    # Filter the URI + args
-	    if ($rf =~ s/^!//) {
-		# Negation in effect: If rule matches, skip
-		($u =~ /$rf/) && (next);
-	    } else {
-		($u =~ /$rf/) || (next);
-	    }
-	}
-
-	# If rule got here, it is a match. Set return code and proceed to
-	# next rule, unless quick flag is set
-	$ret = $rt;
-	
-	# Handle flags
-	if ($ro =~ /,quick,/) {
-	    last;
-	}
-    }
-
-    
-    if ($ret) {
-	$self->Log($r, ('debug', "RequestFilter: Last match: \"$rr\", status=$ret"));
-    } else {
-	# I like default deny, but the mod_rewrite rules should be handling
-	# that.  This is for extended defensive filtering of things not readily
-        # filtered by mod_rewrite.
-	$ret = OK;
-    }
-
-    # Return whatever we got
-    return $ret;
-}
-
 
 # The Alterlist functions manipulate and apply a list of transforms to apply to
 # the headers and cookies of the client request before sending the request
@@ -1881,7 +1865,6 @@ sub AlterlistApply {
 }
 
 # Apply alterlist rules to request headers.
-# (Would save cycles to unify this and the RequestFilter)
 sub AlterlistApplyHeader {
     my ($self, $alterlist, $r) = @_;
     (defined($alterlist->{header})) || (return 0);
@@ -1902,7 +1885,7 @@ sub AlterlistApplyHeader {
 	if ($act =~ /^add$/) {
 	    # Blindly clear then add the header
 	    $r->headers_in->unset($key);
-	    $r->header_in($key,$val);
+	    $r->headers_in->add($key => $val);
 
             # Log obscured value
 	    $self->Log($r, ('debug', "HEADER ADD: $key: " . XHalf($val)));
@@ -1912,13 +1895,13 @@ sub AlterlistApplyHeader {
 		# Update 
 		$tk = $1;
 		# Make sure header was not deleted
-		($r->header_in($tk)) || (next);
+		($r->headers_in->{$tk}) || (next);
 		if ($act =~ /^replace|rep$/) {
 		    # Blindly delete then add the header
 		    # Save old value for log
-		    $tv =  $r->header_in($tk);
+		    $tv =  $r->headers_in->{$tk};
 		    $r->headers_in->unset($tk);
-		    $r->header_in($tk,$val);
+		    $r->headers_in->add($tk => $val);
 
 		    # Log obscured values
 		    $self->Log($r, 'debug', ("AlterlistApplyHeader(): HEADER REPLACE: $tk: " . XHalf($tv) . " -> " . XHalf($val)));
@@ -1926,7 +1909,7 @@ sub AlterlistApplyHeader {
 		} elsif ($act =~ /^delete|del$/) {
 		    # Check for extra content match
 		    if ($val) {
-			$tv = $r->header_in($tk);
+			$tv = $r->headers_in->{$tk};
 			# Handle negation
 			if ($val =~ s/^\!//) {
 			    ($tv =~ /($val)/is) && (next);
@@ -2070,7 +2053,7 @@ sub AlterlistApplyCookie {
 	# Kill trailing '; '
 	$t =~ s/\; $//s;
 	# Ship it
-	$r->header_in("Cookie", $t);
+	$r->headers_in->add('Cookie' => $t);
     }
 
     return $alterlist;
@@ -2198,7 +2181,11 @@ sub Log {
     my $auth_name = ($r->auth_name || "");
     $auth_name .= ': ';
     my $info = ' <client=';
-    $info .= ($r->get_remote_host || "");
+    if ($MP eq 1) {
+        $info .= ($r->get_remote_host || "");
+    } else {
+        $info .= ($r->connection->get_remote_host || "");
+    }
     $info .= ', uri="';
     $info .= ($r->uri() || "");
     (defined($r->args())) && ($info .= '?' . $r->args());
@@ -2275,21 +2262,20 @@ __END__
 
 =head1 NAME
 
-Apache::AppSamurai - An Authenticating Reverse Proxy/Application Front End
+Apache::AppSamurai - An Authenticating Mod_Perl Front End
 
 "Protect your master, even if he is without honour...."
 
 =head1 SYNOPSIS
 
-All configuration is done within Apache.  Requires Apache 1.3.x and mod_perl
-1.24 or above with StackedHandlers, MethodHandlers, Authen, and Authz compiled
-in.  See L</EXAMPLES> for a sample configuration snippet.
+All configuration is done within Apache.  Requires Apache 1.3.x/mod_perl1 or 
+Apache 2.0.x/mod_perl2.  See L</EXAMPLES> for sample configuration segments.
 
 =head1 DESCRIPTION
 
-B<Apache::AppSamurai> protects web applications by providing a sessionable,
-multi-factor authentication capable, and flexible front end for use in a
-reverse proxy configuration.
+B<Apache::AppSamurai> protects web applications from direct attack by
+unauthenticated users, and adds a flexible authentication front end
+to local or proxied applications with limited authentication options.
 
 Unauthenticated users are presented with either a login form, or a basic
 authentication popup (depending on configuration.)  User supplied credentials
@@ -2312,12 +2298,13 @@ addition custom authentication methods
 
 =item *
 
-B<Form or basic user login> - Forms for users, basic auth for client
-programs that are not form aware
+B<Form based or Basic Auth login> - On the front end, supports standard
+form based logins, or optionally Basic Auth login.  (For use with automated
+systems that can not process a form.)
 
 =item *
 
-B<Apache::Session> - Used for core session handling
+B<Apache::Session> - Used for session data handling
 
 =item *
 
@@ -2328,28 +2315,10 @@ modules)
 
 =item *
 
-B<Form based or Basic Auth login> - On the front end, supports standard
-form based logins, or optionally Basic Auth login.  (For use with automated
-systems that can not process a form.)
+B<Unified mod_perl 1 and 2 support> - One module set supports both
+Apache 1.x/mod_perl 1.x and Apache 2.x/mod_perl 2.x
 
 =back
-
-=head1 PROJECT SCOPE
-
-Apache::AppSamurai is meant to be relatively easy to configure and deploy
-for anyone familiar with Apache administration.
-
-There are countless web interfaces and applications that are insecurely
-deployed to the Internet.  Reverse proxies and Identity and Access Management
-systems are becoming widespread, and many greatly reduce the risk of Internet
-deployment.  However, most systems are big and complicated.  Fine for an
-organization-wide deployment, but too heavy for protecting one or a handful of
-apps.
-
-Apache::AppSamurai is not a full request/response filtering proxy, nor is it
-part of a Single Sign On or Federation system.  (Though it should integrate 
-into one.)  Future versions may add more extensive filtering, or include
-response filtering.
 
 =head1 SESSION STORAGE SECURITY
 
@@ -2359,7 +2328,7 @@ authentication C<Authorization> header to be sent to the backend server.
 if stolen.)
 
 To protect the data on-disk, Apache::AppSamurai includes
-its own HMAC based session ID generator and AES encrypting session serializer.
+its own HMAC based session ID generator and encrypting session serializer.
 (L<Apache::AppSamurai::Session::Generate::HMAC_SHA|Apache::AppSamurai::Session::Generate::HMAC_SHA>
 and
 L<Apache::AppSamurai::Session::Serialize::CryptBase64|Apache::AppSamurai::Session::Serialize::CryptBase64>
@@ -2369,8 +2338,8 @@ Apache::Session, or outside of Apache::AppSamurai if desired.
 
 =head1 USAGE
 
-Almost all options are set using C<PerlSetVar> statements, and can be placed
-in any global, virtual server, directory, location, or files section.
+Almost all options are set using C<PerlSetVar> statements, and can be used
+inside most configuration sections.
 
 Each configuration option must be prefixed by the I<AuthName> for the
 Apache::AppSamurai instance you wish to apply the option to.  This
@@ -2422,7 +2391,7 @@ stealing.
 =head3 I<Satisfy> C<All|Any>
 
 (Default: All)
-Set C<require> behavior within protected areas.  Either C<All> to require all
+Set C<require> behaviour within protected areas.  Either C<All> to require all
 authentication checks to succeed, or C<Any> to require only one to.
 
 =head3 I<Secure> C<0|1>
@@ -2436,6 +2405,27 @@ the use of SSL/TLS.
 (Default: 0)
 Set to 1 to require the Microsoft proprietary C<http-only> flag to be set on
 session cookies.
+
+=head3 I<LoginDestination> C<PATH>
+
+(Default: undef)
+Set an optional hard coded destination URI path all users will be directed to
+after login.  (While full URLs are allowed, a path starting in / is
+recommended.)  This setting only applies so form based login.  Basic Auth
+logins always follow the requested URL.
+
+=head3 I<LogoutDestination> C<PATH>
+
+(Default: undef)
+Set an optional hard coded destination URI path all users will be directed to
+after logging out. (While full URLs are allowed, a path starting in / is
+recommended.)   This setting only applies so form based login.  Basic Auth
+logins always follow the requested URL.
+
+If I<LogoutDestination> is unset and I<LoginDestination> is set,
+users will be directed to I<LoginDestination> after logout.  (This is
+to prevent a user from logging back into the logout URI, which would log them
+back out again.  Oh the humanity!) 
 
 =head2 AUTHENTICATION CONFIGURATION
 
@@ -2570,7 +2560,7 @@ B<Apache::Session::Lock::File|Apache::Session::Lock::File>
 (Default: AppSamurai/HMAC_SHA)
 The session ID generator module name. "AppSamurai/HMAC_SHA" is used by default,
 which maps to
-L<Apache::AppSamurai::Session::Generator::HMAC_SHA|Apache::AppSamurai::Session::Generator::HMAC_SHA>
+L<Apache::AppSamurai::Session::Generate::HMAC_SHA|Apache::AppSamurai::Session::Generate::HMAC_SHA>
 This special module takes a server key and a session authentication key and
 returns a HMAC code representing the local ("real") session ID.  (Input and
 output are all SHA256 hex strings that are passed in using the sessionconfig
@@ -2584,18 +2574,43 @@ not use an alternate serializer without first reviewing the related code.
 (Default: AppSamurai/CryptBase64)
 The session data serializer module.  "AppSamurai/CryptBase64" is used by
 default, which maps to
-L<Apache::AppSamurai::Serialize::CryptBase64|Apache::AppSamurai::Serialize::CryptBase64>
+L<Apache::AppSamurai::Session::Serialize::CryptBase64|Apache::AppSamurai::Session::Serialize::CryptBase64>
 This special module uses server key and a session authentication key to
-encrypt session data using AES before Base64 encoding it.  (All keys are 256
-bit hex strings.)
+encrypt session data using a block cipher before Base64 encoding it.
+(All keys are 256 bit hex strings.)
 
 Base64 allows for storage in file, database, etc without worrying about binary
 data issues.  In addition, this module allows for safer storage of data on
 disk, requiring both the local server key and the secret session key from the
 user before unlocking the data.
 
+L<Crypt::CBC|Crypt::CBC> is used with a support block cipher module to perform
+encryption/decryption.  (See the next section for information on
+configuring a cipher.)
+
 As this is tied closely into the current Apache::AppSamurai code, please do not
 use an alternate serializer without first reviewing the related code.
+
+=head3 SessionI<SerializeCipher> C<CIPHER_MODULE>
+
+(Default: undef)
+Select the block cipher provider module for
+L<Apache::AppSamurai::Session::Serialize::CryptBase64|Apache::AppSamurai::Session::Serialize::CryptBase64>
+to use.  For production, you should use this to configure a specific block
+cipher to use.  If not set, the cipher is autodetected from the list below.
+(Note that autodetect is slow and picks the first cipher module it finds,
+which may not be the one you want.)
+
+The following block cipher modules are currently allowed:
+
+ Crypt::Rijndael     - AES implementation (default)
+ Crypt::OpenSSL::AES - OpenSSL AES wrapper
+ Crypt::Twofish      - Twofish implementation
+ Crypt::Blowfish     - Blowfish implementation
+
+See
+L<Apache::AppSamurai::Session::Serialize::CryptBase64|Apache::AppSamurai::Session::Serialize::CryptBase64>
+for more information.
 
 =head3 SessionI<ServerKey> C<KEY>
 
@@ -2737,13 +2752,14 @@ with the "Satisfy All" Apache::AppSamurai setting.  This authorizes any logged
 in user to pass.  This method could be replaced or expanded at a later date if
 more granular authorization is required.  (Groups, roles, etc.)
 
-C<OK> is returned if conditions are satisfied, otherwise C<FORBIDDEN> is
+C<OK> is returned if conditions are satisfied, otherwise C<HTTP_FORBIDDEN> is
 returned.
 
 =head3 login()
 
-Should be configured in the Apache config as the PerlHandler for a special
-pseudo file under the F<AppSamurai/> directory.  In example configs and
+Should be configured in the Apache config as the PerlHandler, (or
+"PerlResponseHandler" for mod_perl 2.x), for a special pseudo file under
+the F<AppSamurai/> directory.  In example configs and
 the example F<login.pl> form page, the pseudo file is named B<LOGIN>.
 
 C<login()> expects an Apache request with a list of credentials included as
@@ -2760,25 +2776,40 @@ If login fails, the browser is redirected to the login form.
 Should be called directly by your logout page or logout pseudo file.
 This expects an Apache request handle.  It can also take a second
 option, which should be a scalar URI path to redirect users to after
-logout.
-
-C<logout()> attempts to look up and destroy the session tied to the
+logout.  C<logout()> attempts to look up and destroy the session tied to the
 passed in session authentication key.
+
+Like C<login()>, you may create a special pseudo file named LOGOUT and
+use PerlHandler, (or "PerlResponseHandler" for mod_perl 2.x), to map it
+to the C<logout()> method.  This is particularly handy when paired with
+mod_rewrite to map a specific application URI to a pseudo file mapped to
+C<logout()>  (See L</EXAMPLES> for a sample config that uses this method.)
+
 
 =head1 EXAMPLES
 
  ## This is a partial configuration example showing most supported
- ## configuration options.  See the examples/conf/ folder in the
- ## Apache::AppSamurai distribution for real-world example configs.
+ ## configuration options and a reverse proxy setup.  See examples/conf/
+ ## in the Apache::AppSamurai distribution for real-world example configs.
 
- ## General mod_perl setup ##
+ ## Apache 1.x/mod_perl 1.x settings are enabled with Apache 2.x/mod_perl 2.x
+ ## config alternatives commented out. ("*FOR MODPERL2 USE:" precedes
+ ## the Apache 2.x/mod_perl 2.x version of any alternative config items.)
+ ## Note that example configs in examples/conf/ use IfDefine to support
+ ## both version sets without having to comment out items. Also note that it
+ ## is far too ugly looking to include in this example.
+
+ ## General mod_perl setup
  
  # Apache::AppSamurai is always strict, warn, and taint clean. (Unless
  # I mucked something up ;)
  PerlWarn On
  PerlTaintCheck On
  PerlModule Apache::Registry
- 
+ #*FOR MODPERL2 USE:
+ # PerlSwitches -wT
+ # PerlModule ModPerl::Registry
+
  # Load the main module and define configuration options for the 
  # "Example" auth_name
  PerlModule Apache::AppSamurai
@@ -2851,8 +2882,10 @@ passed in session authentication key.
  PerlSetVar ExampleSessionGenerate "AppSamurai/HMAC_SHA"
 
  # Use the Apache::AppSamurai::Session::Serialize::CryptBase64
- # data serializer module.
+ # data serializer module with Crypt::Rijndael (AES) as the block
+ # cipher provider
  PerlSetVar ExampleSessionSerialize "AppSamurai/CryptBase64"
+ PerlSetVar ExampleSessionSerializeCipher "Crypt::Rijndael"
 
  # Set the server's encryption passphrase (for use with HMAC session
  # generation and/or encrypted session storage)
@@ -2881,32 +2914,58 @@ passed in session authentication key.
  ## Special AppSamurai directory options ##
  
  # (These will vary widely depending on your specific setup and requirements.)
- <Directory "/var/www/AppSamurai">
+ <Directory "/var/www/htdocs/AppSamurai">
+  AllowOverride None
   deny from all
+  
   <FilesMatch "\.pl$">
    SetHandler perl-script
-   PerlHandler Apache::Registry
    Options +ExecCGI
    AuthType Apache::AppSamurai
    AuthName "Example"
+    
+   PerlHandler Apache::Registry
+   #*FOR MODPERL2 USE:
+   #PerlResponseHandler ModPerl::Registry
+   
    allow from all
   </FilesMatch>
+  
   <Files LOGIN>
    SetHandler perl-script
    AuthType Apache::AppSamurai
    AuthName "Example"
+
    PerlHandler Apache::AppSamurai->login
+   #*FOR MODPERL2 USE:
+   #PerlResponseHandler Apache::AppSamurai->login
+
+   allow from all
+  </Files>
+
+  <Files LOGOUT>
+   SetHandler perl-script
+   AuthType Apache::AppSamurai
+   AuthName "Example"
+
+   PerlHandler Apache::AppSamurai->logout
+   #*FOR MODPERL2 USE:
+   #PerlResponseHandler Apache::AppSamurai->logout
+
    allow from all
   </Files>
  </Directory>
- 
- <Directory "/var/www/AppSamurai/images">
+   
+ <Directory "/var/www/htdocs/AppSamurai/images">
   Options None
   allow from all
  </Directory>
 
  # Protected/proxied resource config 1: Form based
  <Directory "proxy:https://ex.amp.le/thing/*">
+ #*FOR MODPERL2 USE:
+ #<Proxy "https://ex.amp.le/thing/*">
+ 
   AuthType Apache::AppSamurai
   AuthName "Example"
   PerlAuthenHandler Apache::AppSamurai->authenticate
@@ -2914,10 +2973,17 @@ passed in session authentication key.
   Order deny,allow
   Allow from all
   require valid-user
+ 
  </Directory>
+ #*FOR MODPERL2 USE:
+ #</Proxy>
+
 
  # Protected/proxied resource config 2: Basic auth
  <Directory "proxy:https://ex.amp.le/thaang/*">
+ #*FOR MODPERL2 USE:
+ #<Proxy "https://ex.amp.le/thaang/*">
+
   AuthType Basic
   AuthName "Example"
   PerlAuthenHandler Apache::AppSamurai->authenticate
@@ -2941,7 +3007,11 @@ passed in session authentication key.
   Order deny,allow
   Allow from all
   require valid-user
+
  </Directory>
+ #*FOR MODPERL2 USE:
+ #</Proxy>
+
 
  # Do not allow forward proxying
  ProxyRequests Off
@@ -2958,11 +3028,22 @@ passed in session authentication key.
  # Allow in AppSamurai requests to proxy server
  RewriteRule ^/AppSamurai -
 
- # Capture logout URL from app and send to the AppSamurai logout 
- RewriteRule ^/thing/logout\.asp$ /AppSamurai/logout.pl
+ # Capture logout URL from app and send to a pseudo page mapped to logout() 
+ RewriteRule ^/thing/logout\.asp$ /AppSamurai/LOGOUT
 
  # Block all other requests
  RewriteRule .* - [F]
+
+ #*FOR MODPERL2 YOU MUST UNCOMMENT AND PUT THE FOLLOWING INSIDE
+ # RELEVANT VirtualHost SECTIONS (For most Apache2 setups, this would be
+ # the "<VirtualHost _default_:443>" section inside ssl.conf)
+ #
+ ## Enable rewrite engine inside virtualhost
+ #RewriteEngine on
+ ## Inherit rewrite settings from parent (global)
+ #RewriteOptions inherit
+ ## Enable proxy connections to SSL
+ #SSLProxyEngine on
 
 
 =head1 EXTENDING
@@ -2999,10 +3080,6 @@ The default login mod_perl script.  Must be modified to match your setup.
 
 The default HTML login form template.  (Split out from login.pl to ease
 customization.)
-
-=item F<APPSAMURAI_CONTENT/logout.pl>
-
-The default logout mod_perl script.  (Must call the L</logout()> method.) 
 
 =item F<APPSAMURAI_CONTENT/robots.txt>
 
@@ -3056,11 +3133,12 @@ L<http://annocpan.org/dist/Apache-AppSamurai>
 
 =head1 ACKNOWLEDGEMENTS
 
-This system uses some code written by Ken Williams and the
-Apache::AuthCookie developers from the Apache::AuthCookie module.
-While all Apache::AuthCookie functionality has been rolled into the AppSamurai
-package, (based on Apache::AuthCookie version 3.10), this project would not
-exist without it.
+AppSamurai.pm (the main Apache::AppSamurai module), contains some code
+from Apache::AuthCookie, which was developed by Ken Williams and others.
+The included Apache::AuthCookie code is under the same licenses as Perl
+and under the following copyright:
+
+Copyright (c) 2000 Ken Williams. All rights reserved.
 
 =head1 COPYRIGHT & LICENSE
 

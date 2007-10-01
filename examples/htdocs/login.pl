@@ -1,39 +1,71 @@
 #!/usr/bin/perl
 #
-# $Id: login.pl,v 1.2 2007/06/06 17:11:18 pauldoom Exp $
+# $Id: login.pl,v 1.5 2007/08/23 07:44:25 pauldoom Exp $
+
+# Decide which mod_perl to load
+BEGIN {
+    use vars qw($MP);
+    if (eval{require mod_perl2;}) {
+	$MP = 2;
+    } else {
+	require mod_perl;
+	$MP = 1;
+    }
+}
+
 use strict;
-use mod_perl;
+use warnings;
 
 # Point to HTML login page
 my $formsource = "login.html";
 
+# Mod_Perl 2 does not chdir to the script's folder, so you must use
+# a full path.  The list below includes common base paths.  Remove
+# the other array items and enter your local path if none of these
+# match you setup.
+my @formpaths = ( "/var/www/htdocs/AppSamurai",
+		  "/var/www/html/AppSamurai",
+		  "/htdocs/AppSamurai",
+		  "/html/AppSamurai"
+		  );
+
+# This is lame.  Just cycles the paths looking for the form source
+# template ($formsource)
+my $ffound = 0;
+foreach (@formpaths) {
+    if (-f "$_/$formsource") {
+	$formsource = "$_/$formsource";
+	$ffound = 1;
+	last;
+    }
+}
+
+($ffound) or die "FATAL: Could not find form source template file $formsource\n";
+
 # These will replace any __NAME__ values in the form
 my %params = ( MESSAGE => '',
 	       REASON => '',
-	       URI => '',
+               URI => '',
 	       FORMACTION => '/AppSamurai/LOGIN',
-	       USERNAME => '' );
+	       USERNAME => ''
+	       );
 
 
 my $r = shift;
 ($r) or die "FATAL: NO REQUEST SENT TO SCRIPT!\n";
 
-#$params{URI}  = $r->prev->uri;
-
-# Use a hard URI login page instead, and without arguments
-$params{URI} = '/';
-
-#if ($args) {
-#    $params{URI} .= "?$args";
-#}
-
-$r->status(200);
-
 # if there are args, append that to the uri after checking for and removing
 # any ASERRCODE code.
-my $args = $r->prev->args;
+$params{URI} = $r->prev->uri || '';
+
+my $args = $r->prev->args || '';
+
 if (($args) && ($args =~ s/&?ASERRCODE\=(bad_credentials|no_cookie|bad_cookie|expired_cookie)//)) {
     $params{REASON} = $1;
+}
+
+if ($args) { 
+    $params{URI} .= '?' . $args;
 }
 
 # These messages have HTML in them with CSS. (Update as needed, or add a
@@ -51,15 +83,6 @@ if ($params{REASON} eq 'bad_credentials') {
     $params{MESSAGE} = "<span class=\"infored\">Access Denied - Your session has expired. Please log in.</span>";
 }
 
-# Pull in previous username, if set (Note - Using hard redirects clears pnotes;
-# this feature is not currently operational)
-if (($r->prev) && ($r->prev->pnotes)) {
-    my $pn = $r->prev->pnotes;
-    foreach (keys %{$pn}) {
-	$params{$_} = $pn->{$_};
-    }
-}
- 
 # Read in form
 my $form = '';
 open(F, "$formsource") or die "FATAL: Could not find/open login page content\n";
@@ -78,6 +101,7 @@ $r->no_cache(1);
 $r->content_type("text/html");
 $r->headers_out->set("Content-length", length($form));
 $r->headers_out->set("Pragma", "no-cache");
-$r->send_http_header;
+# Only for mod_perl 1
+($MP eq 1) and $r->send_http_header;
 
 $r->print ($form);

@@ -1,5 +1,34 @@
 Revision history for Apache-AppSamurai
 
-0.01    Date/time
-        First version, released on an unsuspecting world.
+1.00	2007-10-01
+	First release with Apache 2.x/mod_perl 2.x support.  Changes
+	include:
+	
+	* Unified Apache 1.x/mod_perl 1.x and Apache 2.x/mod_perl 2.x
+	  support (adds requirement for libapreq)
+
+	* mod_perl 1.x/mod_perl 2.x examples in Apache::AppSamurai
+	  documentation and a unified example in examples/conf/
+
+	* Crypt::CBC used for session data encryption with support for
+	  for Crypt::Rijndael, Crypt::OpenSSL::AES, Crypt::Twofish, or
+	  Crypt::Blowfish as the backend block cipher module.
+
+	* Added SessionSerializeCipher option to specify the block cipher
+	  module to use.  (If undefined, Apache::AppSamurai attempts to
+	  autodetect a suitable module.)
+
+	* Ships with ExtUtils::MakeMaker Makefile.PL for users without
+	  Module::Build. (Module::Build install is still preferred)
+
+	* All submodules now use their CVS revision for their VERSION.
+
+	* Added LoginDestination and LogoutDestination options to
+	  define specific URIs to send users to after login/logout
+
+	* Added confconfer.pl script (under examples/conf) for easier
+	  configuration based on template examples in examples/conf
+
+0.09    2007-07-14
+        First public version, released on an unsuspecting world.
 

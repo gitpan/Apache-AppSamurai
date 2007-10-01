@@ -10,32 +10,49 @@ Apache::AppSamurai features:
 * Extensible/modular multi-factor authentication
 * Form based or Basic auth based authentication on frontend
 * Encrypted storage of session data on proxy
-* "Alterlist" system to add/change/delete cookies or headers before
-  passing requests to the backend
 * Able to use any Apache::Session Storage type (including MySQL or Postgress
   for clustered deployment)
 * Completely configurable from httpd.conf
+* Supports Apache 1.x/mod_perl 1.x and Apache 2.x/mod_perl 2.x with minimal
+  configuration file differences.
 * Lots of other stuff
 
-Apache 1.3.x and mod_perl 1.x are currently supported.
 
 INSTALLATION
 
-Module::Build is required to install this package.  (Available
-from CPAN, or as a package for many systems.... and hopefully
-as a default with Perl some day soon....)
+- With Module::Build (suggested)
 
-To install this module, run the following commands:
+Module::Build is suggested to install this package, and is available
+from CPAN, or as a package for many systems.
+(Skip to the next subsection if you prefer to use a traditional
+ExtUtils::MakeMaker Makefile.PL.)
+
+To install this module with Module::Build, run the following commands:
 
     perl Build.PL
     ./Build
     ./Build test
     ./Build install
 
-If you would like to install the example files, you can run
-Build install and define an installation path for "examples":
+If you would like to install the tools and example files, you can run
+Build install and define an installation path for "misc":
 
-   ./Build install --install_path examples=/usr/local/share/examples/AppSamurai
+   ./Build install --install_path misc=/usr/local/share/AppSamurai
+
+
+- With ExtUtils::MakeMaker
+
+A simple Makefile.PL file is also provided, and should provide enough
+installation functionality for most users.  (Note - This method does
+not install examples, tools, or detect optional modules at this time.)
+
+To install with Makefile.PL:
+
+    perl Makefile.PL
+    make
+    make test
+    make install
+
 
 SUPPORT AND DOCUMENTATION
 
@@ -44,7 +61,7 @@ After installing, you can find documentation for this module with the perldoc co
     perldoc Apache::AppSamurai
 
 See example partial configurations under examples/conf/
-See an example login/logout page set under examples/htdocs/
+See an example login page and supporting files under examples/htdocs/
 
 (See the note in INSTALLATION if you would like these examples installed
 on you system, outside of the Apache-AppSamurai distribution directory.) 
@@ -76,4 +93,4 @@ Copyright (C) 2007 Paul M. Hirsch
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
-$Id: README,v 1.5 2007/07/13 21:36:17 pauldoom Exp $
+$Id: README,v 1.8 2007/09/28 07:11:36 pauldoom Exp $

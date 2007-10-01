@@ -3,15 +3,13 @@
 ##### DO NOT USE THIS!  THIS IS A SAMPLE! #################################
 #### Feel free to base your custom authenticaiton module on it, though ####
 
-# $Id: AuthTest.pm,v 1.2 2007/07/09 17:01:21 pauldoom Exp $
+# $Id: AuthTest.pm,v 1.4 2007/09/13 07:00:16 pauldoom Exp $
 
 package Apache::AppSamurai::AuthTest;
 use strict;
 
-# Keep VERSION (set manually) and REVISION (set by CVS)
-use vars qw($VERSION $REVISION @ISA);
-$VERSION = '0.01';
-$REVISION = substr(q$Revision: 1.2 $, 10);
+use vars qw($VERSION @ISA);
+$VERSION = substr(q$Revision: 1.4 $, 10, -1);
 
 use Carp;
 use Apache::AppSamurai::AuthBase;

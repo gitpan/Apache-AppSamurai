@@ -1,5 +1,5 @@
 #!perl -T
-# $Id: 11-session-gen-hmac_sha.t,v 1.1 2007/07/13 06:33:52 pauldoom Exp $
+# $Id: 11-session-gen-hmac_sha.t,v 1.2 2007/09/08 07:31:09 pauldoom Exp $
 
 use Test::More tests => 4;
 
@@ -7,7 +7,7 @@ BEGIN {
 	use_ok( 'Apache::AppSamurai::Session::Generate::HMAC_SHA' );
 }
 
-diag( "Testing Apache::AppSamurai::Session::Generate::HMAC_SHA $Apache::AppSamurai::Session::Generate::HMAC_SHA::REVISION, Perl $], $^X" );
+diag( "Testing Apache::AppSamurai::Session::Generate::HMAC_SHA $Apache::AppSamurai::Session::Generate::HMAC_SHA::VERSION, Perl $], $^X" );
 
 $sess = { args => {
     ServerKey => '21fccb94da476b7c2a8e4ebfc88526590f14ba37410c5106a9df672fc42626f5',

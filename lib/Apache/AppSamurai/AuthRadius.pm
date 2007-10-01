@@ -1,6 +1,6 @@
 # Apache::AppSamurai::AuthRadius - AppSamurai Radius authentication plugin
 
-# $Id: AuthRadius.pm,v 1.12 2007/07/13 20:17:48 pauldoom Exp $
+# $Id: AuthRadius.pm,v 1.14 2007/09/13 07:00:18 pauldoom Exp $
 
 ##
 # Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
@@ -13,10 +13,8 @@
 package Apache::AppSamurai::AuthRadius;
 use strict;
 
-# Keep VERSION (set manually) and REVISION (set by CVS)
-use vars qw($VERSION $REVISION @ISA);
-$VERSION = '0.01';
-$REVISION = substr(q$Revision: 1.12 $, 10);
+use vars qw($VERSION @ISA);
+$VERSION = substr(q$Revision: 1.14 $, 10, -1);
 
 use Carp;
 use Apache::AppSamurai::AuthBase;

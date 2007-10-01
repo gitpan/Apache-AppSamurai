@@ -1,5 +1,5 @@
 #!perl -T
-# $Id: 05-util.t,v 1.1 2007/07/13 06:33:52 pauldoom Exp $
+# $Id: 05-util.t,v 1.2 2007/09/08 07:31:09 pauldoom Exp $
 
 use Test::More tests => 9;
 
@@ -7,7 +7,7 @@ BEGIN {
 	use_ok( 'Apache::AppSamurai::Util' );
 }
 
-diag( "Testing Apache::AppSamurai::Util $Apache::AppSamurai::Util::REVISION, Perl $], $^X" );
+diag( "Testing Apache::AppSamurai::Util $Apache::AppSamurai::Util::VERSION, Perl $], $^X" );
 
 $hlen = $Apache::AppSamurai::Util::IDLEN;
 

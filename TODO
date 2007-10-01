@@ -1,19 +1,28 @@
 AppSamurai TODO
 ---------------
-* bug - Strange output on login after ActiveSync session timeout:
-	x.x.x.x - - [09/Jun/2007:09:03:00 -0500] "\x03\x01j" 302 - "-" "-"
-* bug - Unexpected session death: Session gone and AuthUnique hits.
-
-* doc - Howto? FAQ?       
+* doc - Howto? FAQ?
 * doc - Add method documentation to modules.  (Missing on many, including
         "alterlist" related methods.)
 
-* feature - Add more auth modules (PAM, local, TACACS+, Kerberos, LDAP, SASL, etc)
 * feature - Add tracked nonce check to login.pl to identify attempted re-posts
+* feature - Add "last access" tracker and complementary stale session data
+            cleaner.  (Could use for in-prog audit trail, too, just don't log
+            anything sensitive)
+* feature - Add more auth modules (volunteers?)  Potential candidates:
+        = Web form - Use LWP::UserAgent to attempt login to a form login based
+                     web page
+        = LDAP - Using Net::LDAP?
+        = Kerberos5 - Using Authen::Krb5Password?
+        = TACACS+ - Using Net::TacacsPlus?
+        = PAM - Using Authen::PAM?
+        = CAPTCHA - Using Authen::PluggableCaptcha or Authen::Captcha?
+        = OpenID - Using Net::OpenID::Consumer?
+        = Lots of others - Authen::Simple::* modules and/or other mutli-auth
+                           frameworks
 * feature - Add multi-stage login support (for challenge/response, next
-            tokencode mode, etc.)
-* feature - CheckUrl is faulty and more extensive URL/header filtering needed
-* feature - Finish and test the RequestFilter feature.
+            tokencode mode, NTLM/Kerberos integrated  IE auth, etc.)
+* feature - CheckUrl is weak and more extensive URL/header sanity filtering
+            is needed
 * feature - Logout is crude and blocks application's native logout.  Add a
             capture system to send logout request to backend, then bundle into
             session kill and send back to browser.
@@ -21,8 +30,14 @@ AppSamurai TODO
 * feature - Should refactor the Session, Tracker, and AlterList into individual
             modules.  AppSamurai.pm is WAY too fat a pig.
 * feature - Modularize/generalize the Tracker feature to be like Auth system.
+* feature - Add a tracker based filter for dynamic rule based filtering, and
+            a small Perl tool to modify the tracker externally.  Example use:
+            Blocking a specific Windows Mobile device ID.
 
-* uber-feature - Filter server responses. (Would require side-stepping mod_proxy
-                 in Apache 1.x)
+* uber-feature - Filter server responses. (Would require skipping mod_proxy
+                 in Apache 1.x and doing a direct fetch)
+
+* mothballed - RequestFilter feature - Not used, not well tested, and much
+               better options exists (mod_security anyone?)
 ----
-$Id: TODO,v 1.7 2007/07/13 20:17:42 pauldoom Exp $
+$Id: TODO,v 1.24 2007/09/30 18:11:55 pauldoom Exp $
