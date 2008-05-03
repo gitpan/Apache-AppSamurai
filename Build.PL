@@ -1,12 +1,46 @@
 #!/usr/bin/perl -w
 
-# $Id: Build.PL,v 1.16 2007/09/30 18:11:55 pauldoom Exp $
+# $Id: Build.PL,v 1.19 2008/05/01 22:35:40 pauldoom Exp $
 
 use strict;
 use warnings;
 use Module::Build;
 
-# Add extra processing to install example files
+# Decide right now if we are shooting for a mod_perl 1.x
+# or mod_perl 2.x install.  Defaults to mod_perl 2.x.
+# This is to have a proper set of requirements in place
+# so CPAN and others will behave.
+my @extrareq = ();
+if (eval{require mod_perl2;}) {
+    push(@extrareq, 'mod_perl2', 1.9922, 'Apache2::Request', 0);
+    print STDERR "mod_perl 2 detected: Setting requirements accordingly\n";
+} elsif (eval{require mod_perl;}) {
+    push(@extrareq, 'mod_perl', 1.07, 'Apache::Request', 0);
+    print STDERR "mod_perl 1 detected: Setting requirements accordingly\n";
+} else {
+    # Nothing found yet.  Let's go with MP2
+    push(@extrareq, 'mod_perl2', 1.9922, 'Apache2::Request', 0);
+    print STDERR "mod_perl not detected: Setting requirements for mod_perl 2.x\n";
+}
+
+# Try to find a supported cipher module now.  If none
+# are present, Crypt::Rijndael is set as a requirement.
+# No requirement set otherwise.  (Recommendation will still appear)
+my @blockciphers = ('Crypt::Rijndael', 'Crypt::OpenSSL::AES', 'Crypt::Twofish',  'Crypt::Blowfish');
+my $bc;
+while ($bc = shift @blockciphers) {
+    if (eval{requires $bc;}) {
+	print STDERR "$bc detected: Crypt::CBC block cipher needs met\n";
+	last;
+    }
+}
+
+if (scalar @blockciphers) {
+    push(@extrareq, 'Crypt::Rijndael', 0);
+    print STDERR "No suitable block ciphers detected. Setting requirement for Crypt::Rijndael\n";
+}
+
+ # Add extra processing to install example files
 my $class = Module::Build->subclass(code => <<'EOF');
 sub process_misc_files {
     my $self = shift;
@@ -46,39 +80,21 @@ my $builder = $class->new(
 			      'Digest::SHA'  => 0,
 			      'Storable'     => 0,
 			      'Crypt::CBC' => 2.17,
+			      @extrareq
 			  },
 			  add_to_cleanup      => [ 'Apache-AppSamurai-*' ],
 			  recommends => {
-			      'LWP::UserAgent'      => 0, # AuthBasic.pm
-			      'HTTP::Request'       => 0, # AuthBasic.pm
-			      'Authen::Radius'      => 0, # AuthRadius.pm
 			      'Crypt::OpenSSL::AES' => 0, # Needs one
 			      'Crypt::Twofish'      => 0, # good block cipher
 			      'Crypt::Blowfish'     => 0, # for Crypt::CBC to
 			      'Crypt::Rijndael'     => 0, # use.
 			      'Apache::Test'        => 0, # Full tests
+			      'LWP::UserAgent'      => 0, # AuthBasic.pm
+			      'HTTP::Request'       => 0, # AuthBasic.pm
+			      'Authen::Radius'      => 0, # AuthRadius.pm
+			      'Authen::Simple'      => 0, # AuthSimple.pm
 			  },
 			  auto_features => {
-			      MP1_support =>
-			      {
-				  description => "Check mod_perl 1.x kit",
-				  requires => { 'mod_perl'     => 1.07 },
-			      },
-			      APR1_support =>
-			      {
-				  description => "Check Apache::Request (Perl module for libapreq)",
-				  requires => { 'Apache::Request' => 0 },
-			      },
-			      MP2_support =>
-			      {
-				  description => "Check mod_perl 2.x kit",
-				  requires => { 'mod_perl2'     => 1.9922 },
-			      },
-			      APR2_support =>
-			      {
-				  description => "Check Apache2::Request (Perl module for libapreq)",
-				  requires => { 'Apache2::Request' => 0 },
-			      },
 			      Apache_Test_support =>
 			      {
 				  description => "Perform full Apache::Test testing",
@@ -105,28 +121,20 @@ my $builder = $class->new(
 			      resources =>
 			      {
 				  homepage => 'http://appsamurai.sourceforge.net',
-				  #bugtracker => 'http://rt.cpan.org/NoAuth/Bugs.html?Dist=Module-Build',
-				  #MailingList => 'mailto:module-build@perl.org',
-				  #repository => 'http://svn.perl.org/modules/Module-Build/'
+				  bugtracker => 'http://rt.cpan.org/Public/Dist/Display.html?Name=Apache-AppSamurai',
+				  MailingList => 'mailto:appsamurai-misc@lists.sourceforge.net',
+				  #repository => 'http://svn.perl.org/modules/Apache-AppSamurai/'
 			      }
 			  },
                           # Build MakeMaker Makefile.PL (limited functionality)
-			  create_makefile_pl => 'traditional',
+			  create_makefile_pl => 'passthrough',
 			  );
 
-# Check for installed and matching mod_perl and libapr Perl mods
-if ($builder->feature("MP2_support")) {
-    ($builder->feature("APR2_support")) or die "FATAL: Apache2::Request (libapreq) for mod_perl 2 not found\n";
-} elsif ($builder->feature("MP1_support")) {
-    ($builder->feature("APR1_support")) or die "FATAL: Apache::Request (libapreq) for mod_perl 1 not found\n";
-} else {
-    die "FATAL: MOD_PERL 1 or 2 NOT DETECTED!\n";
-}
 
 # Enable and setup optional Apache::Test tests
 if ($builder->feature("Apache_Test_support")) {
     # Add t/*.at tests
-    #$builder->test_files("t/*.at");
+    $builder->test_files("t/*.t", "t/*.at");
     print STDERR "NOTICE: Apache::Test tests not fully implemented (this is a place holder)\n";
 } else {
     # Danger Will Wheaton....

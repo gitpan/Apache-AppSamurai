@@ -4,10 +4,10 @@
 #                                encrypt the Base64 encoded and frozen data
 #                                before encoding into Base64 for final delivery
 
-# $Id: CryptBase64.pm,v 1.17 2007/09/29 18:27:46 pauldoom Exp $
+# $Id: CryptBase64.pm,v 1.18 2008/04/30 21:40:12 pauldoom Exp $
 
 ##
-# Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
+# Copyright (c) 2008 Paul M. Hirsch (paul@voltagenoir.org).
 # All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -16,13 +16,14 @@
 
 package Apache::AppSamurai::Session::Serialize::CryptBase64;
 use strict;
+use warnings;
 
 use Crypt::CBC 2.17;
 use MIME::Base64;
 use Storable qw(nfreeze thaw);
 
 use vars qw($VERSION);
-$VERSION = substr(q$Revision: 1.17 $, 10, -1);
+$VERSION = substr(q$Revision: 1.18 $, 10, -1);
 
 # Set keylength in hex chars (bytes x 2) - This should stay 64 (256bits)
 # at least.  Note that the session key generator must have the same
@@ -227,7 +228,7 @@ See L<Apache::AppSamurai> for support information.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2007 Paul M. Hirsch, all rights reserved.
+Copyright 2008 Paul M. Hirsch, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

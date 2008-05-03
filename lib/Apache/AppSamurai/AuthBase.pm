@@ -1,10 +1,10 @@
 # Apache::AppSamurai::AuthBase - AppSamurai authentication plugin base
 #                                module.
 
-# $Id: AuthBase.pm,v 1.14 2007/09/13 07:00:18 pauldoom Exp $
+# $Id: AuthBase.pm,v 1.15 2008/04/30 21:40:05 pauldoom Exp $
 
 ##
-# Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
+# Copyright (c) 2008 Paul M. Hirsch (paul@voltagenoir.org).
 # All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -19,9 +19,10 @@
 
 package Apache::AppSamurai::AuthBase;
 use strict;
+use warnings;
 
 use vars qw($VERSION);
-$VERSION = substr(q$Revision: 1.14 $, 10, -1);
+$VERSION = substr(q$Revision: 1.15 $, 10, -1);
 
 use Carp;
 
@@ -67,6 +68,7 @@ sub Configure {
 		      DefaultLogLevel => 'error',
 		      @_,
 		  };
+
     return 1;
 }
 
@@ -600,7 +602,7 @@ See L<Apache::AppSamurai> for support information.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2007 Paul M. Hirsch, all rights reserved.
+Copyright 2008 Paul M. Hirsch, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

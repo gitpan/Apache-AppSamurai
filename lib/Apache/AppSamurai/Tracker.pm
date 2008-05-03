@@ -2,10 +2,10 @@
 #  used for flexible, persistent, IPC tracking of events.  Useful for
 #  brute force detection and other fun "stuff"
 
-# $Id: Tracker.pm,v 1.10 2007/09/13 07:00:18 pauldoom Exp $
+# $Id: Tracker.pm,v 1.11 2008/04/30 21:40:06 pauldoom Exp $
 
 ##
-# Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
+# Copyright (c) 2008 Paul M. Hirsch (paul@voltagenoir.org).
 # All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -17,9 +17,10 @@
 
 package Apache::AppSamurai::Tracker;
 use strict;
+use warnings;
 
 use vars qw($VERSION @ISA $incl);
-$VERSION = substr(q$Revision: 1.10 $, 10, -1);
+$VERSION = substr(q$Revision: 1.11 $, 10, -1);
 
 use Apache::Session;
 
@@ -192,7 +193,7 @@ authors.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2007 Paul M. Hirsch, all rights reserved.
+Copyright 2008 Paul M. Hirsch, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

@@ -1,9 +1,9 @@
 # Apache::AppSamurai::Util - Utility functions for AppSamurai
 
-# $Id: Util.pm,v 1.19 2007/09/13 07:00:18 pauldoom Exp $
+# $Id: Util.pm,v 1.21 2008/04/30 21:40:06 pauldoom Exp $
 
 ##
-# Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
+# Copyright (c) 2008 Paul M. Hirsch (paul@voltagenoir.org).
 # All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -16,9 +16,10 @@
 
 package Apache::AppSamurai::Util;
 use strict;
+use warnings;
 
 use vars qw($VERSION @EXPORT_OK @ISA $IDLEN);
-$VERSION = substr(q$Revision: 1.19 $, 10, -1);
+$VERSION = substr(q$Revision: 1.21 $, 10, -1);
 
 use Digest::SHA qw(sha256_hex hmac_sha256_hex);
 use Time::HiRes;
@@ -93,12 +94,12 @@ sub _expire_calc {
 }
 
 
-# Create a session authentication key to send back to the user's browser.  This is
-# the "session key", not the local "session ID".  It will be used with the
-# server's ServerKey value to create the local session ID, and to look up a
-# user's session going forward.  This session key is also used to encrypt the
-# user's session data.  Do not log the session authentication key!  All logging
-# should reference the server side session key/ID.
+# Create a session authentication key to send back to the user's browser.
+# This is the "session key", not the local "session ID".  It will be used
+# with the server's ServerKey value to create the local session ID, and 
+# to look up a user's session going forward.  This session key is also used
+# to encrypt the user's session data.  Do not log the session authentication
+# key!  All logging should reference the server side session key/ID.
 #
 # If no arguments are passed the key is chosen randomly, else it is a digest of
 # the concatenated args

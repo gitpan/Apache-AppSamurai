@@ -1,5 +1,6 @@
 Build.PL
 Changes
+FAQ
 MANIFEST
 META.yml # Will be created by "make dist"
 README
@@ -15,6 +16,7 @@ lib/Apache/AppSamurai.pm
 lib/Apache/AppSamurai/AuthBase.pm
 lib/Apache/AppSamurai/AuthBasic.pm
 lib/Apache/AppSamurai/AuthRadius.pm
+lib/Apache/AppSamurai/AuthSimple.pm
 lib/Apache/AppSamurai/Session.pm
 lib/Apache/AppSamurai/Tracker.pm
 lib/Apache/AppSamurai/Util.pm
@@ -27,5 +29,14 @@ t/11-session-gen-hmac_sha.t
 t/12-session-ser-cryptbase64.t
 t/15-tracker.t
 t/50-authbase.t
+t/55-authsimple.t
+t/70-apache-simple.at
+t/98-pod.t
+t/99-pod-coverage.t
 t/startup.pl
+t/lib/Apache/AppSamurai/AuthFLUFFY.pm
+t/lib/Apache/AppSamurai/AuthPASSWORD.pm
+t/lib/Apache/AppSamurai/Auth123456.pm
+t/conf/extra.conf.in
+t/conf/junk.passwd
 Makefile.PL

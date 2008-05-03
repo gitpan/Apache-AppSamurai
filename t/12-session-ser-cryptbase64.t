@@ -1,5 +1,5 @@
 #!perl -T
-# $Id: 12-session-ser-cryptbase64.t,v 1.4 2007/09/13 06:32:17 pauldoom Exp $
+# $Id: 12-session-ser-cryptbase64.t,v 1.5 2007/10/05 07:18:19 pauldoom Exp $
 
 use Test::More tests => 3;
 
@@ -23,7 +23,11 @@ $sess = { data => {
           }
 };
 
-print STDERR "NOTICE: Testing using Crypt::CBC with " . $sess->{args}->{SerializeCipher} . "\n";
+unless($sess->{args}->{SerializeCipher}) {
+    diag("WARNING: No supported Crypt::CBC compatible block cipher module found!");
+} else { 
+    diag("NOTICE: Testing using Crypt::CBC with " . $sess->{args}->{SerializeCipher});
+}
 
 ok(Apache::AppSamurai::Session::Serialize::CryptBase64::serialize($sess), "serialize() - Serialized (encoded and encrypted) data");
 

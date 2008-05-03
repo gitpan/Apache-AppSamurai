@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# $Id: login.pl,v 1.5 2007/08/23 07:44:25 pauldoom Exp $
+# $Id: login.pl,v 1.9 2008/05/03 06:43:24 pauldoom Exp $
 
 # Decide which mod_perl to load
 BEGIN {
@@ -15,6 +15,11 @@ BEGIN {
 
 use strict;
 use warnings;
+# Use the session key maker and session ID computer (which is just a
+# HMAC) for CSRF protection in the login form
+use Apache::AppSamurai::Util qw(CreateSessionAuthKey ComputeSessionId
+				CheckSidFormat HashPass);
+
 
 # Point to HTML login page
 my $formsource = "login.html";
@@ -82,6 +87,45 @@ if ($params{REASON} eq 'bad_credentials') {
     # Expired session
     $params{MESSAGE} = "<span class=\"infored\">Access Denied - Your session has expired. Please log in.</span>";
 }
+
+# Build nonce and HMAC (using server key) fro CSRF protection.  (Note - this
+# only protects the login form.... once logged in, the app must protect itself.
+# Yet another place where having bidirectional filtering would be useful)
+# Required for CSRF protection
+
+# Note - Pulling session config code out of the main module would allow this
+# to be much shorter/simpler. Strike 90834895345 against the giant module.
+# TODO - This should be in a module!!!
+my $auth_name = ($r->auth_name()) || (die("login.pl(): No auth name defined!\n"));
+my $dirconfig = $r->dir_config;
+my $serverkey = '';
+if (exists($dirconfig->{$auth_name . "SessionServerPass"})) {
+    my $serverpass = $dirconfig->{$auth_name . "SessionServerPass"};
+    ($serverpass =~ s/^\s*([[:print:]]{8,}?)\s*$/$1/s) || 
+	die('error', "login.pl(): Invalid ${auth_name}SessionServerPass (must be use at least 8 printable characters\n");
+    ($serverpass =~ /^(password|serverkey|serverpass|12345678)$/i) && 
+	die("login.pl: ${auth_name}SessionServerPass is $1...  That is too lousy\n");
+    
+    ($serverkey = HashPass($serverpass)) || die("login.pl: Problem computing server key hash for $auth_name");
+
+} elsif (exists($dirconfig->{$auth_name . "SessionServerKey"})) {
+    $serverkey = $dirconfig->{$auth_name . "SessionServerKey"};
+
+} else {
+    die("login.pl(): You must configure either ${auth_name}SessionServerPass or ${auth_name}SessionServerKey in your Apache configuration\n"); 
+}
+
+# Check for valid key format
+(CheckSidFormat($serverkey)) || die("login.pl(): You must a valid ${auth_name}SessionServerPass or ${auth_name}SessionServerKey configured!");
+
+# Get a nonce.  Note - since this gets sent back, and it is the same as the alg
+# used to get the random session key, PRNG weakness could be an issue.
+$params{NONCE} = CreateSessionAuthKey();
+
+# Get HMAC of nonce with server key (this is just like we use the session key
+# and server key to get the real session ID, though THIS time we are sending it
+# to the browser.)
+$params{SIG} = ComputeSessionId($params{NONCE}, $serverkey);
 
 # Read in form
 my $form = '';

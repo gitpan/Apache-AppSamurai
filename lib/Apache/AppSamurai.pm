@@ -1,9 +1,9 @@
 # Apache::AppSamurai - Protect your master, even if he is without honour.
 
-# $Id: AppSamurai.pm,v 1.63 2007/09/29 23:23:53 pauldoom Exp $
+# $Id: AppSamurai.pm,v 1.66 2008/05/03 06:43:25 pauldoom Exp $
 
 ##
-# Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
+# Copyright (c) 2008 Paul M. Hirsch (paul@voltagenoir.org).
 # All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -21,15 +21,16 @@ use warnings;
 
 # Keep VERSION (set manually) and REVISION (set by CVS)
 use vars qw($VERSION $REVISION $MP);
-$VERSION = '1.00';
-$REVISION = substr(q$Revision: 1.63 $, 10, -1);
+$VERSION = '1.01';
+$REVISION = substr(q$Revision: 1.66 $, 10, -1);
 
 use Carp;
 
 # mod_perl Includes
 BEGIN {
     if (eval{require mod_perl2;}) {
-	mod_perl2->import(qw(1.9922 StackedHandlers MethodHandlers Authen Authz));
+	mod_perl2->import(qw(1.9922 StackedHandlers MethodHandlers Authen
+			     Authz));
         require Apache2::Connection;
 	require Apache2::RequestRec;
 	require Apache2::RequestUtil;
@@ -96,6 +97,7 @@ use Apache::AppSamurai::Tracker;
 sub recognize_user_mp1 ($$) { &recognize_user_real }
 sub recognize_user_mp2 : method { &recognize_user_real }
 *recognize_user = ($MP eq 1) ? \&recognize_user_mp1 : \&recognize_user_mp2;
+
 sub recognize_user_real {
     my ($self, $r) = @_;
     my ($auth_type, $auth_name) = ($r->auth_type, $r->auth_name);
@@ -186,7 +188,9 @@ sub _convert_to_get {
     $self->Log($r, ('debug', "Converting POST -> GET"));
 
     # Use Apache::Request for immediate access to all arguments.
-    my $ar = ($MP eq 1) ? Apache::Request->instance($r) : Apache2::Request->new($r);
+    my $ar = ($MP eq 1) ? 
+	Apache::Request->instance($r) :
+	Apache2::Request->new($r);
     
     # Pull list if GET and POST args
     my @params = $ar->param;
@@ -205,10 +209,12 @@ sub _convert_to_get {
 
 	foreach $value (@values) {
 	    if ($MP eq 1) {
-		push(@pairs, Apache::Util::escape_uri($name) . '=' . Apache::Util::escape_uri($value));
+		push(@pairs, Apache::Util::escape_uri($name) . '=' .
+		     Apache::Util::escape_uri($value));
 	    } else {
 		# Assume mod_perl 2 behaviour
-		push(@pairs, Apache2::Util::escape_path($name, $r->pool) . '=' . Apache2::Util::escape_path($value, $r->pool));
+		push(@pairs, Apache2::Util::escape_path($name, $r->pool) . 
+		     '=' . Apache2::Util::escape_path($value, $r->pool));
 	    }
 	}   
     }
@@ -231,9 +237,11 @@ sub login_real {
     
     # Use the magic of Apache::Request to ditch POST handling code
     # and cut to the args.
-    my $ar = ($MP eq 1) ? Apache::Request->instance($r) : Apache2::Request->new($r);
+    my $ar = ($MP eq 1) ?
+	Apache::Request->instance($r) :
+	Apache2::Request->new($r);
 
-    my ($ses_key, $tc, $destination);
+    my ($ses_key, $tc, $destination, $nonce, $sig, $serverkey);
     my @credentials = ();
 
     # Get the hard set destination, or setup to just reload
@@ -244,10 +252,41 @@ sub login_real {
     } else {
 	# Someday something slick could hold the URL, then cut through
 	# to it.  Someday.  Today we die.
-        $r->server->log_error("No key 'destination' found in form data");
+        $self->Log($r, ('warn', "No key 'destination' found in form data"));
         $r->subprocess_env('AuthCookieReason', 'no_cookie');
         return $auth_type->login_form($r);
     }  
+
+    # Check form nonce and signature
+    if (defined($ar->param("nonce")) and defined($ar->param("sig"))) {
+	unless (($nonce = CheckSidFormat($ar->param("nonce"))) and
+		($sig = CheckSidFormat($ar->param("sig")))) {
+	    
+	    $self->Log($r, ('warn', "Missing/invalid form nonce or sig"));
+	    $r->subprocess_env('AuthCookieReason', 'no_cookie');
+	    $r->err_headers_out->{'Location'} = $self->URLErrorCode($destination, 'bad_credentials');
+	    $r->status(REDIRECT);
+	    return REDIRECT;
+	}
+	$serverkey = $self->GetServerKey($r) or die("FATAL: Could not fetch valid server key\n");
+
+	# Now check!
+	unless ($sig eq ComputeSessionId($nonce, $serverkey)) {
+	    # Failed!
+	    $self->Log($r, ('warn', "Bad signature on posted form (Possible scripted attack)"));
+	    $r->subprocess_env('AuthCookieReason', 'no_cookie');
+	    $r->err_headers_out->{'Location'} = $self->URLErrorCode($destination, 'bad_credentials');
+	    $r->status(REDIRECT);
+	    return REDIRECT;
+	}
+    } else {
+	# Failed!
+	$self->Log($r, ('warn', "Missing NONCE and/or SIG in posted form (Possible scripted attack)"));
+	$r->subprocess_env('AuthCookieReason', 'no_cookie');
+	$r->err_headers_out->{'Location'} = $self->URLErrorCode($destination, 'bad_credentials');
+	$r->status(REDIRECT);
+	return REDIRECT;
+    }
 
     # Get the credentials from the data posted by the client
     while ($tc = $ar->param("credential_" . scalar(@credentials))) {
@@ -310,7 +349,7 @@ sub login_real {
     $r->err_headers_out->{'Location'} = $self->URLErrorCode($destination, 'bad_credentials');
     $r->status(REDIRECT);
     return REDIRECT;
-    # Handle this ol' style
+    # Handle this ol' style - XXX remove?
     #$r->subprocess_env('AuthCookieReason', 'bad_credentials');
     #$r->uri($destination);
     #return $auth_type->login_form($r);
@@ -402,8 +441,8 @@ sub loginBasic_real {
 	}
     }
 
-    # Unset the username
-    $r->user(undef);
+    # Unset the username if set
+    $r->user() and $r->user(undef);
 
     # Add their IP to the failure tracker and just return HTTP_FORBIDDEN
     # if they exceed the limit
@@ -467,7 +506,9 @@ sub logout_real {
 	$sessconfig->{key} = $key;
 
         # Compute real session ID
-	($sessconfig->{ServerKey}) || (($self->Log($r, ('error', 'logout(): ServerPass or ServerKey not set (required for HMAC sessions)'))) && (return undef));
+	($sessconfig->{ServerKey}) ||
+	    (($self->Log($r, ('error', 'logout(): ${auth_name}SessionServerPass or ${auth_name}SessionServerKey not set (required for HMAC sessions)'))) &&
+	     (return undef));
 	($sid = ComputeSessionId($key, $sessconfig->{ServerKey})) || (($self->Log($r, ('error', 'logout(): Error computing session ID'))) && (return undef));
     } else {
 	$sid = '';
@@ -907,6 +948,7 @@ sub authen_cred {
 	if ($ret) {
 	    # Success!
 	    $authenticated++;
+
 	    # Modify header (add/delete/filter) and cookie
 	    # (add/delete/filter/pass) rules
 	    $self->AlterlistMod($alterlist, $authenticators->{$authmethods[$i]}->{alterlist});
@@ -950,6 +992,7 @@ sub authen_ses_key {
 
     # Is it well formed?
     ($key = CheckSidFormat($key)) || (($self->Log($r,('error', 'Invalid Session Key Format'))) && (return undef));
+
     # Get session config from Apache
     ($sessconfig = $self->GetSessionConfig($r)) || (die("authen_ses_key(): Unable to get session configuration while checking authentication\n"));
 
@@ -1149,18 +1192,30 @@ sub InitAuthenticators {
 	    }
 	}
 
-	if ($am eq 'AuthServer') {
-	    # This is a built in that uses Basic Auth to the backend server.
+	if ($am =~ /^(AuthSimple)(.+)$/) {
+	    # Framework auth modules (like AuthSimple) - These need
+	    # a master AppSamurai::Auth*** module that expects the name
+	    # of a submodule and its arguments
+	    # Set submodule name, assuming it is under the master's tree
+	    $ch->{SubModule} = $2;
+	    # Use the master auth module from AppSamurai itself
+	    $amn = 'Apache::AppSamurai::' . $1;
 	} else {
 	    $amn = 'Apache::AppSamurai::' . $am;
-	    eval("require $amn;") || (die("InitAuthenticators(): Could not load $amn\n"));
-	    {
-		# Disable strict within block so we can call <module>::new
-		no strict 'refs';
-		$authenticators->{$am} = $amn->new(%{$ch});
-	    }
-            ($authenticators->{$am}) || (die("InitAuthenticators(): Could not create new $amn instance: " . $! . "\n"));
 	}
+	
+	(eval "require $amn;") ||
+	    (die("InitAuthenticators(): Could not load $amn\n"));
+	
+	{
+	    # Disable strict within block so we can call <module>::new
+	    no strict 'refs';
+	    ($authenticators->{$am} = $amn->new(%{$ch})) ||
+		(die("InitAuthenticators(): Could not create new $amn instance: " . $! . "\n"));
+	}
+	
+	# A little sanity check on the returned authenticator
+	$authenticators->{$am}->can("Authenticate") or die("InitAuthenticators(): Newly created $amn instance (for $am) does not have Authenticate() method");
     }
     
     return $authenticators;
@@ -1208,13 +1263,11 @@ sub GetSessionConfig {
     # by default.
     (exists($sessconfig->{Generate})) || ($sessconfig->{Generate} = "AppSamurai/HMAC_SHA");
     (exists($sessconfig->{Serialize})) || ($sessconfig->{Serialize} = "AppSamurai/CryptBase64");
-    
-    # Check/clean ServerKey if present
+   
+    # Check/clean ServerPass if present (else assume ServerKey set)
     if (exists($sessconfig->{ServerPass})) {
-	($sessconfig->{ServerPass} =~ s/^\s*([[:print:]]{8,}?)\s*$/$1/s) || (($self->Log($r, ('error', "GetSessionConfig(): Invalid ServerKey (must be use at least 8 printable characters"))) && (return undef));
-	($sessconfig->{ServerPass} =~ /^(password|serverkey|serverpass|12345678)$/i) && (($self->Log($r, ('error', "GetSessionConfig(): ServerKey is $1...  That is too lousy"))) && (return undef));
-	
-	($sessconfig->{ServerKey} = HashPass($sessconfig->{ServerPass})) || (($self->Log($r, ('error', "GetSessionConfig(): Problem computing server key hash"))) && (return undef));
+	# Set the key (note - GetServerKey logs the error, if any)
+	($sessconfig->{ServerKey} = $self->GetServerKey($r)) || (return undef);
     }
 
     # We have to have a ServerKey at this point, in hex form.
@@ -1248,6 +1301,50 @@ sub GetSessionConfig {
     }
     
     return $sessconfig;
+}
+
+
+# Compute/check server key from server pass, returning key.
+sub GetServerKey {
+    my ($self, $r) = @_;
+    my $auth_name = ($r->auth_name()) || (die("GetServerKey(): No auth name defined!\n"));
+    my $dirconfig = $r->dir_config;
+    my $serverkey = '';
+    
+    if (exists($dirconfig->{$auth_name . "SessionServerPass"})) {
+	my $serverpass = $dirconfig->{$auth_name . "SessionServerPass"};
+	
+	unless ($serverpass =~ s/^\s*([[:print:]]{8,}?)\s*$/$1/s) {
+	    $self->Log($r, ('error', "GetServerKey(): Invalid ${auth_name}SessionServerPass (must be use at least 8 printable characters"));
+	    return undef;
+	}
+	
+	if ($serverpass =~ /^(password|serverkey|serverpass|12345678)$/i) {
+	    $self->Log($r, ('error', "GetServerKey(): ${auth_name}SessionServerPass is $1...  That is too lousy"));
+	    return undef;
+	}
+	
+	unless ($serverkey = HashPass($serverpass)) {
+	    $self->Log($r, ('error', "GetServerKey(): Problem computing server key hash for ${auth_name}SessionServerPass"));
+	    return undef;
+	}
+
+    } elsif (exists($dirconfig->{$auth_name . "SessionServerKey"})) {
+	$serverkey = $dirconfig->{$auth_name . "SessionServerKey"};
+
+    } else {
+	$self->Log($r, ('error', "GetServerKey(): You must define either ${auth_name}SessionServerPass or ${auth_name}SessionServerKey in your Apache configuration"));
+	return undef;
+    }
+    
+    # Check for valid key format
+    unless (CheckSidFormat($serverkey)) {
+	# Not good, dude.  This should not happen
+	$self->Log($r, ('error', "GetServerKey(): Invalid server session key (CheckSidFormat() failure) for $auth_name"));
+	return undef;
+    }
+
+    return $serverkey;
 }
 
 
@@ -1318,7 +1415,8 @@ sub FetchKeysource {
     # Pull values in with very moderate checking
     foreach $s (@srcs) {
 	if ($s =~ /^\s*header:([\w\d\-\_]+)\s*$/i) {
-	    if (($t) = $r->headers_in->{$1} =~ /^\s*([\x20-\x7e]+?)\s*$/s) {
+	    if ($r->headers_in->{$1} and
+		($t) = $r->headers_in->{$1} =~ /^\s*([\x20-\x7e]+?)\s*$/s) {
 		$keytext .= $t;
 		$self->Log($r, ('debug', "FetchKeysource(): Collected $s: " . XHalf($t)));
 	    } else {
@@ -3097,8 +3195,8 @@ Image files for login page.
 
 L<Apache::AppSamurai::Session>, L<Apache::AppSamurai::Tracker>,
 L<Apache::AppSamurai::AuthBase>, L<Apache::AppSamurai::AuthBasic>,
-L<Apache::AppSamurai::AuthRadius>, L<Apache::AppSamurai::Util>,
-L<Apache::AppSamurai::Session::Generate::HMAC_SHA>,
+L<Apache::AppSamurai::AuthRadius>, L<Apache::AppSamurai::AuthSimple>,
+L<Apache::AppSamurai::Util>,L<Apache::AppSamurai::Session::Generate::HMAC_SHA>,
 L<Apache::AppSamurai::Session::Serialize::CryptBase64>,
 L<Apache::Session>
 
@@ -3142,7 +3240,7 @@ Copyright (c) 2000 Ken Williams. All rights reserved.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2007 Paul M. Hirsch, all rights reserved.
+Copyright 2008 Paul M. Hirsch, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

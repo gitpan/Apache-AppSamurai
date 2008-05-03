@@ -88,9 +88,9 @@ You can also look for information at:
 
 COPYRIGHT AND LICENCE
 
-Copyright (C) 2007 Paul M. Hirsch
+Copyright (C) 2008 Paul M. Hirsch
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
-$Id: README,v 1.8 2007/09/28 07:11:36 pauldoom Exp $
+$Id: README,v 1.9 2008/04/30 21:38:52 pauldoom Exp $

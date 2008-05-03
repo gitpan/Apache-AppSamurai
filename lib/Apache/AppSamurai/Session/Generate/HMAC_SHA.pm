@@ -3,10 +3,10 @@
 #                                takes input server key and client session key
 #                                and returns the SHAx HMAC of the two.
 
-# $Id: HMAC_SHA.pm,v 1.8 2007/09/13 07:00:19 pauldoom Exp $
+# $Id: HMAC_SHA.pm,v 1.9 2008/04/30 21:40:10 pauldoom Exp $
 
 ##
-# Copyright (c) 2007 Paul M. Hirsch (paul@voltagenoir.org).
+# Copyright (c) 2008 Paul M. Hirsch (paul@voltagenoir.org).
 # All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it under
@@ -15,9 +15,10 @@
 
 package Apache::AppSamurai::Session::Generate::HMAC_SHA;
 use strict;
+use warnings;
 
 use vars qw($VERSION);
-$VERSION = substr(q$Revision: 1.8 $, 10, -1);
+$VERSION = substr(q$Revision: 1.9 $, 10, -1);
 
 use Digest::SHA qw(sha256_hex hmac_sha256_hex);
 
@@ -131,7 +132,7 @@ See L<Apache::AppSamurai> for support information.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2007 Paul M. Hirsch, all rights reserved.
+Copyright 2008 Paul M. Hirsch, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
